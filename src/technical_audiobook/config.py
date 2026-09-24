@@ -109,7 +109,7 @@ class NarrationConfig(Model):
     max_images: int = Field(default=10, ge=3, le=100)
     context_chars: int = Field(default=4000, ge=0)
     review: bool = True
-    max_revisions: int = Field(default=2, ge=0, le=5)
+    max_revisions: int = Field(default=2, ge=0, le=50)
     include_exercises: bool = False
     instructions_file: str | None = None
 
