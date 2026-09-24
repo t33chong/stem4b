@@ -33,6 +33,9 @@ image_max_dimension = 2000
 include_nonlinear_epub = false
 
 [narration]
+# Set to 2 or more to narrate source-verified independent chapters concurrently.
+# Sections within a chapter remain sequential. Worker count does not invalidate caches.
+workers = 1
 max_pdf_pages = 3
 max_source_chars = 18000
 max_images = 10

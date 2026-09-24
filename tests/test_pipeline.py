@@ -6,6 +6,7 @@ import pytest
 from conftest import wave_bytes
 
 from technical_audiobook.api import LLMClient, SpeechClient
+from technical_audiobook.chapters import BoundaryDecision
 from technical_audiobook.cli import main
 from technical_audiobook.config import Config, LLMConfig, TTSConfig
 from technical_audiobook.models import Draft, Review
@@ -13,8 +14,9 @@ from technical_audiobook.pipeline import convert, preflight_output
 
 
 @pytest.mark.parametrize("book_fixture", ["pdf_book", "epub_book"])
+@pytest.mark.parametrize("workers", [1, 2])
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg not installed")
-def test_end_to_end_book_to_m4b(request, book_fixture, workspace, tmp_path, monkeypatch):
+def test_end_to_end_book_to_m4b(request, book_fixture, workers, workspace, tmp_path, monkeypatch):
     book = request.getfixturevalue(book_fixture)
     calls = {"chat": 0, "speech": 0}
 
@@ -24,7 +26,20 @@ def test_end_to_end_book_to_m4b(request, book_fixture, workspace, tmp_path, monk
             calls["speech"] += 1
             return httpx.Response(200, content=wave_bytes(), headers={"content-type": "audio/wav"})
         calls["chat"] += 1
-        if "source-grounded editor" in payload["messages"][0]["content"]:
+        if "You assess a proposed chapter boundary" in payload["messages"][0]["content"]:
+            evidence = [
+                json.loads(p["text"])
+                for p in payload["messages"][1]["content"]
+                if p["type"] == "text" and p["text"].startswith("{")
+            ]
+            candidate = next(item for item in evidence if item["role"].startswith("CANDIDATE"))
+            result = BoundaryDecision(
+                source_id=candidate["source_id"],
+                independent=True,
+                title="Second chapter",
+                reason="New chapter begins here.",
+            ).model_dump()
+        elif "source-grounded editor" in payload["messages"][0]["content"]:
             result = Review(approved=True).model_dump()
         else:
             units = []
@@ -70,6 +85,7 @@ def test_end_to_end_book_to_m4b(request, book_fixture, workspace, tmp_path, monk
         lambda conf, work: SpeechClient(conf, work, transport),
     )
     config = Config(llm=LLMConfig(model="test-vision"), tts=TTSConfig(model="test-tts"))
+    config.narration.workers = workers
     output = tmp_path / f"{book_fixture}.m4b"
     assert convert(book, output, workspace, config) == output
     assert output.stat().st_size > 0
@@ -77,7 +93,12 @@ def test_end_to_end_book_to_m4b(request, book_fixture, workspace, tmp_path, monk
     transcript = json.loads((workspace / "narration.json").read_text())
     source = json.loads((workspace / "source.json").read_text())
     assert len(transcript["coverage"]) == len(source["units"])
+    if workers == 2:
+        chapter_plan = json.loads((workspace / "chapter-plan.json").read_text())
+        assert chapter_plan["workers"] == 2
+        assert len(chapter_plan["jobs"]) == 2
     before = calls.copy()
+    config.narration.workers = 1
     convert(book, output, workspace, config)
     assert calls == before
 

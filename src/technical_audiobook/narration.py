@@ -1,9 +1,12 @@
 import base64
 import json
 import logging
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from pathlib import Path
+from threading import Event
 
 from .api import LLMClient, TruncatedResponse
+from .chapters import ChapterJob, ChapterPlanner
 from .chunking import Chunk
 from .config import Config
 from .models import Book, Draft, Review, Segment, Transcript
@@ -131,7 +134,7 @@ class Narrator:
             ).read_text(encoding="utf-8")
 
     def _cache_directory(self, chunk: Chunk, previous: list[Segment]) -> Path:
-        narration_options = self.config.narration.model_dump(exclude={"max_revisions"})
+        narration_options = self.config.narration.model_dump(exclude={"max_revisions", "workers"})
         context = [u.model_dump() if u else None for u in [chunk.before, chunk.after]]
         inputs = [
             NARRATION_VERSION,
@@ -172,7 +175,22 @@ class Narrator:
         # Raising the budget then resumes at the next revision instead of starting over.
         return max(candidates, key=progress)
 
-    def chunk(self, chunk: Chunk, previous: list[Segment]) -> Draft:
+    def _cached_draft(self, chunk: Chunk, previous: list[Segment]) -> Draft | None:
+        final = self._cache_directory(chunk, previous) / "accepted.json"
+        if not final.is_file():
+            return None
+        draft = Draft.model_validate(read_json(final))
+        check_coverage(draft, chunk)
+        append_segments(previous, draft.segments)
+        return draft
+
+    @staticmethod
+    def _check_cancelled(stop: Event | None):
+        if stop is not None and stop.is_set():
+            raise CancelledError("Another chapter failed; completed checkpoints were retained")
+
+    def chunk(self, chunk: Chunk, previous: list[Segment], stop: Event | None = None) -> Draft:
+        self._check_cancelled(stop)
         directory = self._cache_directory(chunk, previous)
         directory.mkdir(parents=True, exist_ok=True)
         final = directory / "accepted.json"
@@ -196,6 +214,7 @@ class Narrator:
         feedback = None
         try:
             for revision in range(self.config.narration.max_revisions + 1):
+                self._check_cancelled(stop)
                 draft_file = directory / f"draft-{revision}.json"
                 review_file = directory / f"review-{revision}.json"
                 if draft_file.exists():
@@ -230,6 +249,7 @@ class Narrator:
                     feedback = Review.model_validate(read_json(review_file))
                     validate_review(feedback)
                 else:
+                    self._check_cancelled(stop)
                     feedback = self.client.generate(
                         [
                             {
@@ -273,8 +293,8 @@ class Narrator:
             mid = len(chunk.units) // 2
             left = Chunk(chunk.id + "a", chunk.units[:mid], chunk.before, chunk.units[mid])
             right = Chunk(chunk.id + "b", chunk.units[mid:], chunk.units[mid - 1], chunk.after)
-            first = self.chunk(left, previous)
-            second = self.chunk(right, append_segments(previous, first.segments))
+            first = self.chunk(left, previous, stop)
+            second = self.chunk(right, append_segments(previous, first.segments), stop)
             # Keep continuation flags for appending against the preceding whole-book transcript.
             # Internal continuations are resolved here; an initial continuation remains external.
             first_segments = [s.model_copy(deep=True) for s in first.segments]
@@ -309,20 +329,83 @@ class Narrator:
             f"Inspect {directory}; no incomplete audiobook will be packaged."
         )
 
+    def _chapter_seeds(self, jobs: list[ChapterJob]) -> dict[str, list[Segment]]:
+        """Preserve the context of accepted work from an earlier sequential run.
+
+        Walk only the already accepted prefix. A chapter that had started sequentially
+        retains its original preceding accepted context, so its cache keys stay valid.
+        New independent chapters start with an empty narration history. No model calls
+        are made and no checkpoint is rewritten during this compatibility scan.
+        """
+        previous: list[Segment] = []
+        seeds = {}
+        for job in jobs:
+            seed = previous
+            for index, chunk in enumerate(job.chunks):
+                draft = self._cached_draft(chunk, previous)
+                if draft is None:
+                    return seeds
+                if index == 0:
+                    seeds[job.id] = seed
+                previous = append_segments(previous, draft.segments)
+        return seeds
+
+    def _narrate_chapter(
+        self, job: ChapterJob, previous: list[Segment], stop: Event
+    ) -> list[Draft]:
+        self._check_cancelled(stop)
+        log.info("Processing chapter job %s: %s", job.id, job.title)
+        drafts = []
+        for index, chunk in enumerate(job.chunks, 1):
+            log.info(
+                "Processing section %s (%s/%s in chapter job %s; %s–%s)",
+                chunk.id,
+                index,
+                len(job.chunks),
+                job.id,
+                chunk.units[0].id,
+                chunk.units[-1].id,
+            )
+            draft = self.chunk(chunk, previous, stop)
+            previous = append_segments(previous, draft.segments)
+            drafts.append(draft)
+        log.info("Chapter job %s complete", job.id)
+        return drafts
+
     def narrate(self, book: Book, chunks: list[Chunk]) -> Transcript:
+        jobs = ChapterPlanner(self.client, self.config, self.work).plan(book, chunks)
+        seeds = self._chapter_seeds(jobs) if len(jobs) > 1 else {}
+        stop = Event()
+        results: dict[str, list[Draft]] = {}
+        workers = min(self.config.narration.workers, len(jobs))
+        log.info("Narrating %s chapter jobs with %s workers", len(jobs), workers)
+        if workers == 1:
+            for job in jobs:
+                results[job.id] = self._narrate_chapter(job, seeds.get(job.id, []), stop)
+        else:
+            with ThreadPoolExecutor(
+                max_workers=workers, thread_name_prefix="narration"
+            ) as executor:
+                futures = {
+                    executor.submit(self._narrate_chapter, job, seeds.get(job.id, []), stop): job
+                    for job in jobs
+                }
+                try:
+                    for future in as_completed(futures):
+                        results[futures[future].id] = future.result()
+                except BaseException:
+                    stop.set()
+                    for future in futures:
+                        future.cancel()
+                    log.warning("Stopping chapter workers; completed narration remains cached")
+                    raise
+
+        # Completion order never controls book order. Assemble only after every job succeeds.
         segments: list[Segment] = []
         coverage, warnings = [], list(book.warnings)
         if not self.config.narration.review:
             warnings.append("Source review was disabled for this transcript.")
-        for index, chunk in enumerate(chunks, 1):
-            log.info(
-                "Processing section %s/%s (%s–%s)",
-                index,
-                len(chunks),
-                chunk.units[0].id,
-                chunk.units[-1].id,
-            )
-            draft = self.chunk(chunk, segments)
+        for draft in (draft for job in jobs for draft in results[job.id]):
             segments = append_segments(segments, draft.segments)
             coverage.extend(draft.coverage)
             warnings.extend(draft.uncertainties)

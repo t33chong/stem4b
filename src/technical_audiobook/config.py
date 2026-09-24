@@ -104,6 +104,7 @@ class ExtractionConfig(Model):
 
 
 class NarrationConfig(Model):
+    workers: int = Field(default=1, ge=1, le=32)
     max_pdf_pages: int = Field(default=3, ge=1, le=20)
     max_source_chars: int = Field(default=18000, ge=1000)
     max_images: int = Field(default=10, ge=3, le=100)

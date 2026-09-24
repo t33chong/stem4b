@@ -5,6 +5,7 @@ from filelock import FileLock, Timeout
 
 from .api import LLMClient, SpeechClient
 from .audio import package, require_ffmpeg, speech_plan, synthesize
+from .chapters import chapter_candidates
 from .chunking import plan_chunks
 from .config import Config
 from .extract import extract_book, save_image
@@ -91,6 +92,7 @@ def convert(
                     cover_path.suffix.lower() == ".svg",
                 )
             chunks = plan_chunks(book, config.narration)
+            candidates = chapter_candidates(chunks)
             write_json(
                 work / "plan.json",
                 {
@@ -101,6 +103,14 @@ def convert(
                     "source_characters": sum(len(u.text) for u in book.units),
                     "source_images": sum(len(u.images) for u in book.units),
                     "baseline_llm_requests": len(chunks) * (2 if config.narration.review else 1),
+                    "narration_workers": config.narration.workers,
+                    "chapter_boundary_requests_if_uncached": (
+                        len(candidates) if config.narration.workers > 1 else 0
+                    ),
+                    "chapter_candidates": [
+                        {"chunk_id": c.id, "source_id": c.units[0].id, "title": c.units[0].heading}
+                        for c in candidates
+                    ],
                     "warnings": book.warnings,
                     "chunks": [{"id": c.id, "source_ids": [u.id for u in c.units]} for c in chunks],
                 },

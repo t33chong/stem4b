@@ -126,12 +126,58 @@ prompt and context changes still invalidate the affected narration. Logs disting
 `Processing section` (checking a checkpoint) from `Reusing narration` and `Narrating section`
 (making a new model request).
 
+## Concurrent chapter narration
+
+To narrate independent chapters concurrently, set this in your TOML configuration:
+
+```toml
+[narration]
+workers = 4
+```
+
+The default is `1`. PDF top-level outline entries and EPUB top-level headings provide
+candidate chapter starts. Before launching independent jobs, the LLM examines the source
+on both sides of each candidate, including page images, to check that a new chapter starts
+cleanly and no paragraph, equation, code listing, table or footnote continues across it.
+A chapter beginning partway through a PDF page cannot be separated by this version.
+Uncertain boundaries stay in the preceding sequential job. Books without suitable
+chapter candidates stay sequential; no artificial page ranges are treated as chapters.
+
+Each worker narrates one chapter job at a time. Its sections still receive the preceding
+accepted narration and undergo the same review/revision checks. Newly independent
+chapters start without preceding generated narration; neighboring **source** context and
+the same narration policy and pronunciation glossary remain available. Completed jobs
+are assembled in book order, even when later chapters finish first.
+
+`plan.json` lists chapter candidates during offline extraction. Boundary checks happen
+only during narration, add at most one initial logical request per uncached candidate
+(API/schema retries can add calls), and are saved in `chapter-boundaries/`.
+`chapter-plan.json` records verified boundaries, rejected candidates and the resulting
+jobs. Boundary validation is a model judgment, not a guarantee; inspect its reasons and
+review representative output when choosing a model. Inconclusive checks (including
+truncated responses or evidence exceeding the input budget) are cached as rejected
+boundaries too, so a restart does not silently change the chapter partition.
+
+Worker count does not invalidate narration. When enabling workers in a partially narrated
+book, chapters already started sequentially retain their original accepted context and
+checkpoints. Switching back to one worker reuses cached boundary decisions and serializes
+the same jobs. If a chapter fails, queued jobs are cancelled and active workers stop between
+requests; completed sections in all chapters remain reusable. No final transcript or
+audiobook is assembled from incomplete jobs.
+
+Long chapters still run sequentially internally, so speedup depends on chapter sizes and
+provider rate limits. Speculative lookahead within chapters is tracked separately in
+[Upcoming features](UPCOMING_FEATURES.md).
+
+## Workspace artifacts
+
 Useful workspace files:
 
 | File | Purpose |
 | --- | --- |
 | `source.json`, `source/assets/` | Source evidence and page/figure images |
 | `plan.json` | Ordered source batches and initial request estimate |
+| `chapter-boundaries/`, `chapter-plan.json` | Cached source checks and independent narration jobs |
 | `narration/*/draft-*.json`, `review-*.json` | Inspectable draft/review history |
 | `narration.json`, `narration.txt` | Final adaptation and human-readable export |
 | `requests.jsonl` | Request purposes and provider-reported usage; no API keys |
@@ -157,7 +203,8 @@ speech calls, and a failed source review stops the conversion before TTS.
   Shell variables take precedence over `.env`. File references are relative to the TOML.
 - `tts.max_chars` is enforced after pronunciation replacement, splitting at paragraphs,
   sentences or words. Choose a limit your endpoint supports. Speech requests run with
-  bounded `tts.workers`; narration is sequential for continuity and stable pronunciation.
+  bounded `tts.workers`; `narration.workers` independently controls chapter concurrency.
+  Sections within each chapter stay sequential.
 - WAV, MP3, FLAC, Opus and AAC responses are normalized to mono 16-bit PCM. Raw `pcm`
   responses are assumed little-endian signed 16-bit mono at `tts.pcm_sample_rate`.
 - Set `tts.instructions` only when your model supports it. `tts.speed` is a request to

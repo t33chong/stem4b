@@ -184,7 +184,7 @@ def legacy_directory(narrator, chunk, previous):
             narrator.policy,
             REVIEW_POLICY,
             narrator.config.llm.model_dump(),
-            narrator.config.narration.model_dump(),
+            narrator.config.narration.model_dump(exclude={"workers"}),
             [unit.model_dump() for unit in chunk.units],
             [unit.model_dump() if unit else None for unit in (chunk.before, chunk.after)],
             [segment.model_dump() for segment in previous[-3:]],
