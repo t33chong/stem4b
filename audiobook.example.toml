@@ -1,0 +1,63 @@
+[llm]
+base_url = "http://localhost:4000/v1"
+model = "your-vision-model"
+api_key_env = "LLM_API_KEY"
+timeout_seconds = 300
+max_output_tokens = 16000
+# Use "max_completion_tokens" for endpoints that require it.
+token_parameter = "max_tokens"
+# "prompt" omits response_format for servers without JSON mode.
+json_mode = "json_object"
+# No temperature is sent unless configured; some reasoning models reject it.
+# temperature = 0.2
+# Provider-specific fields, e.g. reasoning_effort, go in [llm.extra_body].
+
+[tts]
+base_url = "http://localhost:8880/v1"
+model = "your-tts-model"
+voice = "your-voice"
+api_key_env = "TTS_API_KEY"
+response_format = "wav"
+speed = 1.0
+max_chars = 2500
+workers = 4
+# Omit instructions for servers/models that do not support them.
+# instructions = "Read clearly, at an unhurried pace appropriate for a technical textbook."
+
+[extraction]
+pdf_dpi = 144
+image_max_dimension = 2000
+# One-based, inclusive physical PDF pages; omit for the entire book.
+# start_page = 1
+# end_page = 12
+include_nonlinear_epub = false
+
+[narration]
+max_pdf_pages = 3
+max_source_chars = 18000
+max_images = 10
+context_chars = 4000
+review = true
+max_revisions = 2
+include_exercises = false
+# Optional file adds book-specific instructions to the built-in narration policy.
+# instructions_file = "book-instructions.md"
+
+[audio]
+sample_rate = 24000
+bitrate = "64k"
+heading_pause_ms = 800
+chapter_pause_ms = 1500
+toc_depth = 3
+
+[book]
+# Override absent or incorrect source metadata.
+# title = "My technical book"
+# author = "A. Author"
+# cover = "cover.png"
+
+[pronunciations]
+NumPy = "numb pie"
+PyTorch = "pie torch"
+JSON = "jay son"
+# SQL = "sequel"
