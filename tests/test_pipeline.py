@@ -82,7 +82,10 @@ def test_end_to_end_book_to_m4b(request, book_fixture, workspace, tmp_path, monk
     assert calls == before
 
 
-def test_offline_cli_extract(pdf_book, tmp_path, capsys):
+def test_offline_cli_extract(pdf_book, tmp_path, capsys, monkeypatch):
+    # The CLI discovers audiobook.toml and .env in its working directory. Do not
+    # apply a user's real book/page selection to this synthetic three-page PDF.
+    monkeypatch.chdir(tmp_path)
     output = tmp_path / "book.m4b"
     assert main(["convert", str(pdf_book), "-o", str(output), "--until", "extract"]) == 0
     assert (tmp_path / "book.work" / "plan.json").exists()

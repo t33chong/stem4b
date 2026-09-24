@@ -130,21 +130,50 @@ class Narrator:
                 config.narration.instructions_file
             ).read_text(encoding="utf-8")
 
-    def chunk(self, chunk: Chunk, previous: list[Segment]) -> Draft:
+    def _cache_directory(self, chunk: Chunk, previous: list[Segment]) -> Path:
+        narration_options = self.config.narration.model_dump(exclude={"max_revisions"})
         context = [u.model_dump() if u else None for u in [chunk.before, chunk.after]]
-        key = digest(
-            [
-                NARRATION_VERSION,
-                self.policy,
-                REVIEW_POLICY,
-                self.config.llm.model_dump(),
-                self.config.narration.model_dump(),
-                [u.model_dump() for u in chunk.units],
-                context,
-                [s.model_dump() for s in previous[-3:]],
+        inputs = [
+            NARRATION_VERSION,
+            self.policy,
+            REVIEW_POLICY,
+            self.config.llm.model_dump(),
+            narration_options,
+            [u.model_dump() for u in chunk.units],
+            context,
+            [s.model_dump() for s in previous[-3:]],
+        ]
+
+        def directory_for(options: dict) -> Path:
+            key = digest([*inputs[:4], options, *inputs[5:]])
+            return self.work / "narration" / f"{chunk.id}-{key[:20]}"
+
+        directory = directory_for(narration_options)
+        candidates = [directory]
+        # Original checkpoints included max_revisions (then restricted to 0–5).
+        # Reconstruct their exact keys, preserving every source/prompt/model/context
+        # check. Never reuse an arbitrary cache just because its section ID matches.
+        for limit in range(6):
+            candidates.append(directory_for({**narration_options, "max_revisions": limit}))
+        for candidate in candidates:
+            if (candidate / "accepted.json").is_file():
+                return candidate
+
+        def progress(candidate: Path) -> tuple[int, bool]:
+            revisions = [
+                int(path.stem.removeprefix("draft-"))
+                for path in candidate.glob("draft-*.json")
+                if path.stem.removeprefix("draft-").isdigit()
             ]
-        )
-        directory = self.work / "narration" / f"{chunk.id}-{key[:20]}"
+            latest = max(revisions, default=-1)
+            return latest, (candidate / f"review-{latest}.json").is_file()
+
+        # Keep using legacy files in place, including unfinished draft/review history.
+        # Raising the budget then resumes at the next revision instead of starting over.
+        return max(candidates, key=progress)
+
+    def chunk(self, chunk: Chunk, previous: list[Segment]) -> Draft:
+        directory = self._cache_directory(chunk, previous)
         directory.mkdir(parents=True, exist_ok=True)
         final = directory / "accepted.json"
         if final.exists():
@@ -173,6 +202,7 @@ class Narrator:
                     draft = Draft.model_validate(read_json(draft_file))
                     validate(draft)
                 else:
+                    log.info("Narrating section %s, draft %s", chunk.id, revision)
                     messages = [
                         {"role": "system", "content": self.policy},
                         {"role": "user", "content": content},
@@ -195,7 +225,8 @@ class Narrator:
                 if not self.config.narration.review:
                     write_json(final, draft)
                     return draft
-                if review_file.exists():
+                cached_review = review_file.exists()
+                if cached_review:
                     feedback = Review.model_validate(read_json(review_file))
                     validate_review(feedback)
                 else:
@@ -225,7 +256,8 @@ class Narrator:
                     draft.uncertainties.extend(f.description for f in feedback.findings)
                     write_json(final, draft)
                     return draft
-                log.warning(
+                log.log(
+                    logging.DEBUG if cached_review else logging.WARNING,
                     "Narration %s needs revision %s: %s",
                     chunk.id,
                     revision + 1,
@@ -284,7 +316,7 @@ class Narrator:
             warnings.append("Source review was disabled for this transcript.")
         for index, chunk in enumerate(chunks, 1):
             log.info(
-                "Narrating section %s/%s (%s–%s)",
+                "Processing section %s/%s (%s–%s)",
                 index,
                 len(chunks),
                 chunk.units[0].id,

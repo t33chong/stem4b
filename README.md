@@ -118,6 +118,14 @@ changing voice regenerates speech without regenerating narration. An unchanged c
 M4B is reused. A different existing output requires `--force` or a new output path.
 Only one conversion can use a workspace at a time.
 
+If a section exhausts `narration.max_revisions`, raise that limit and rerun the same
+command. The revision budget is not part of the narration cache identity: accepted
+sections are reused, and the failed section continues from its saved draft/review history.
+This also works with checkpoints created before this resume fix. Other source, model,
+prompt and context changes still invalidate the affected narration. Logs distinguish
+`Processing section` (checking a checkpoint) from `Reusing narration` and `Narrating section`
+(making a new model request).
+
 Useful workspace files:
 
 | File | Purpose |
