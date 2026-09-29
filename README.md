@@ -101,15 +101,63 @@ Generate and inspect narration before spending on TTS:
 
 ```sh
 .venv/bin/audiobook convert textbook.pdf -c audiobook.toml -o textbook.m4b --until narrate
-# Review textbook.work/narration.txt or edit the spoken text in narration.json.
-.venv/bin/audiobook synthesize textbook.work/narration.json -c audiobook.toml -o textbook.m4b
+# Review and edit textbook.work/narration.txt in your text editor.
+.venv/bin/audiobook synthesize textbook.work/narration.txt -c audiobook.toml -o textbook.m4b
 ```
 
-`narration.json` is the editable source for `synthesize`; `narration.txt` is a readable
-export, not a TTS input protocol. Keep the JSON structure intact. A `heading` segment's
-`display_title` controls navigation; its `text` is spoken. The `synthesize` command does
-not call the LLM or re-review your edits. Running `convert` again reconstructs the
-transcript from its narration cache, so use `synthesize` to retain manual transcript edits.
+`narration.txt` is the canonical spoken-text source for conversion and text-file synthesis.
+`--until narrate` returns its path. The text is parsed deterministically: no LLM rewrites
+or re-reviews your edits. Pronunciation replacements, speech chunking, chapter navigation
+and heading/chapter pauses still apply. An unedited export produces the same speech
+requests and cache keys as the generated JSON transcript.
+
+The text format is intentionally small, not general-purpose Markdown:
+
+```text
+Title: Signals & Information
+Author: Test Author
+Format: audiobook-text-v1
+
+# 1. Signals
+Chapter one. Signals.
+
+A signal carries information. Edit the spoken prose here.
+
+## 1.1. Amplitude
+Section one point one. Amplitude.
+
+Amplitude is measured in volts.
+```
+
+- The first three lines are metadata and are not spoken. Keep a blank line after them.
+- One to six `#` characters mark a navigation heading and its depth. The display title
+  after `#` is not spoken; the following nonblank block is its spoken wording. Keep that
+  wording immediately below the heading, then a blank line before ordinary prose.
+- All other body text is spoken. Blank lines separate paragraphs; there are no comments,
+  hidden instructions, or general Markdown formatting to be stripped automatically.
+- In the versioned format, write a literal backslash as `\\` and a literal leading `#`
+  as `\#`. Exports escape these automatically. A line containing only `\` preserves a
+  blank line *inside* a spoken heading. Metadata can use `\n` for embedded newlines.
+  Leave these escapes intact unless you intend to change the corresponding text.
+
+Keep `narration.json` beside `narration.txt`: it remains the generated baseline with source
+coverage, review warnings and cover metadata. Edits to the text are not attributed to
+source units or represented as having passed the original review. A standalone `.txt`
+script also works; an optional same-stem `.json` supplies its cover, or use `book.cover`.
+Existing exports without the `Format` line remain readable (their backslashes are literal).
+Unedited old exports are upgraded on the next conversion; edited ones are preserved.
+
+Rerunning `convert` preserves and uses edited text when the generated baseline is unchanged.
+If the baseline changes while the text contains edits, conversion stops without overwriting
+either final narration file. Use `synthesize narration.txt` to keep the edited script, or
+move the edited file aside and rerun `convert` to export the new generated narration.
+Accepted narration checkpoints remain cached. `--force` permits replacing the M4B, **not**
+overwriting text edits.
+
+For backward compatibility, explicitly passing a `.json` to `synthesize` still uses that
+JSON's spoken text and ignores any sibling `.txt` edits. Prefer the `.txt` command above
+for normal editing. Unchanged speech chunks are reused; an edit can also change neighboring
+chunks if it changes where speech is split.
 
 The default workspace is the output path with `.m4b` replaced by `.work`. Override it
 with `--work-dir`. Rerun the same command after interruption: validated narration and
@@ -179,7 +227,8 @@ Useful workspace files:
 | `plan.json` | Ordered source batches and initial request estimate |
 | `chapter-boundaries/`, `chapter-plan.json` | Cached source checks and independent narration jobs |
 | `narration/*/draft-*.json`, `review-*.json` | Inspectable draft/review history |
-| `narration.json`, `narration.txt` | Final adaptation and human-readable export |
+| `narration.txt` | Editable canonical speech script, with navigation headings |
+| `narration.json` | Generated narration baseline, source coverage and cover metadata |
 | `requests.jsonl` | Request purposes and provider-reported usage; no API keys |
 | `audio/`, `audio.json` | Verified speech clips and ordered audio plan |
 | `chapters.ffmeta`, `output.json` | Chapter timing and final artifact verification |

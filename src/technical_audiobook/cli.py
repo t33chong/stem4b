@@ -32,9 +32,12 @@ def parser() -> argparse.ArgumentParser:
         help="Stop after a stage; extract is offline and needs no model settings",
     )
     speech = commands.add_parser(
-        "synthesize", help="Produce M4B from an existing, optionally edited narration.json"
+        "synthesize",
+        help="Produce M4B from editable narration.txt (or an explicit JSON transcript)",
     )
-    speech.add_argument("transcript", type=Path)
+    speech.add_argument(
+        "transcript", type=Path, help="Editable narration.txt, or an explicit JSON transcript"
+    )
     for command in (conversion, speech):
         command.add_argument("-o", "--output", type=Path, required=True, help="Output .m4b file")
         command.add_argument("-c", "--config", type=Path, help="TOML configuration file")

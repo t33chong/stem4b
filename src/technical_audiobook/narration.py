@@ -10,6 +10,7 @@ from .chapters import ChapterJob, ChapterPlanner
 from .chunking import Chunk
 from .config import Config
 from .models import Book, Draft, Review, Segment, Transcript
+from .narration_text import render_text, save_narration
 from .prompts import NARRATION_POLICY, REVIEW_POLICY
 from .storage import asset_path, atomic_text, digest, read_json, write_json
 
@@ -423,17 +424,9 @@ class Narrator:
             warnings=warnings,
             cover=book.cover,
         )
-        write_json(self.work / "narration.json", transcript)
-        export_text(transcript, self.work / "narration.txt")
+        save_narration(transcript, self.work)
         return transcript
 
 
 def export_text(transcript: Transcript, target: Path):
-    # Display heading text is not mixed into the actual spoken segment text.
-    parts = [f"Title: {transcript.title}\nAuthor: {transcript.author}"]
-    for segment in transcript.segments:
-        if segment.kind == "heading":
-            parts.append(f"{'#' * segment.heading_level} {segment.display_title}\n{segment.text}")
-        else:
-            parts.append(segment.text)
-    atomic_text(target, "\n\n".join(parts) + "\n")
+    atomic_text(target, render_text(transcript))

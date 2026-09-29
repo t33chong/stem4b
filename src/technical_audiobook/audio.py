@@ -16,6 +16,7 @@ from .api import SpeechClient
 from .chunking import split_speech
 from .config import Config
 from .models import Transcript
+from .narration_text import SpeechScript
 from .storage import asset_path, atomic_text, digest, file_digest, read_json, write_json
 
 log = logging.getLogger(__name__)
@@ -65,7 +66,7 @@ def pronounce(text: str, glossary: dict[str, str]) -> str:
     return re.sub(pattern, lambda match: glossary[match.group()], text)
 
 
-def speech_plan(transcript: Transcript, config: Config) -> list[AudioChapter]:
+def speech_plan(transcript: Transcript | SpeechScript, config: Config) -> list[AudioChapter]:
     chapters: list[AudioChapter] = []
     current = AudioChapter(transcript.title)
     paragraphs: list[str] = []
@@ -250,7 +251,9 @@ def escape_metadata(value: str) -> str:
     return value
 
 
-def ffmetadata(transcript: Transcript, chapters: list[AudioChapter], sample_rate: int) -> str:
+def ffmetadata(
+    transcript: Transcript | SpeechScript, chapters: list[AudioChapter], sample_rate: int
+) -> str:
     lines = [
         ";FFMETADATA1",
         f"title={escape_metadata(transcript.title)}",
@@ -277,7 +280,7 @@ def ffmetadata(transcript: Transcript, chapters: list[AudioChapter], sample_rate
 
 
 def package(
-    transcript: Transcript,
+    transcript: Transcript | SpeechScript,
     chapters: list[AudioChapter],
     config: Config,
     work: Path,

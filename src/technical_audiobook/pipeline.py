@@ -11,6 +11,7 @@ from .config import Config
 from .extract import extract_book, save_image
 from .models import Transcript
 from .narration import Narrator
+from .narration_text import SpeechScript, load_script
 from .storage import read_json, write_json
 
 log = logging.getLogger(__name__)
@@ -32,7 +33,7 @@ def preflight_output(output: Path, work: Path, force: bool):
 
 
 def render_transcript(
-    transcript: Transcript,
+    transcript: Transcript | SpeechScript,
     config: Config,
     work: Path,
     output: Path,
@@ -122,11 +123,12 @@ def convert(
                 return work / "plan.json"
             client = LLMClient(config.llm, work)
             try:
-                transcript = Narrator(client, config, work).narrate(book, chunks)
+                Narrator(client, config, work).narrate(book, chunks)
             finally:
                 client.close()
             if until == "narrate":
-                return work / "narration.json"
+                return work / "narration.txt"
+            transcript = load_script(work / "narration.txt")
             return render_transcript(transcript, config, work, output, until, force)
     except Timeout as exc:
         raise ValueError(f"Another process is using this workspace: {work}") from exc
@@ -139,7 +141,7 @@ def synthesize_transcript(
     work = transcript_file.parent
     try:
         with FileLock(work / ".pipeline.lock", timeout=0):
-            transcript = Transcript.model_validate(read_json(transcript_file))
+            transcript = load_script(transcript_file)
             return render_transcript(transcript, config, work, output, force=force)
     except Timeout as exc:
         raise ValueError(f"Another process is using this workspace: {work}") from exc

@@ -10,7 +10,7 @@ from technical_audiobook.chapters import BoundaryDecision
 from technical_audiobook.cli import main
 from technical_audiobook.config import Config, LLMConfig, TTSConfig
 from technical_audiobook.models import Draft, Review
-from technical_audiobook.pipeline import convert, preflight_output
+from technical_audiobook.pipeline import convert, preflight_output, synthesize_transcript
 
 
 @pytest.mark.parametrize("book_fixture", ["pdf_book", "epub_book"])
@@ -19,11 +19,13 @@ from technical_audiobook.pipeline import convert, preflight_output
 def test_end_to_end_book_to_m4b(request, book_fixture, workers, workspace, tmp_path, monkeypatch):
     book = request.getfixturevalue(book_fixture)
     calls = {"chat": 0, "speech": 0}
+    speech_inputs = []
 
     def handle(req):
         payload = json.loads(req.content)
         if req.url.path.endswith("speech"):
             calls["speech"] += 1
+            speech_inputs.append(payload["input"])
             return httpx.Response(200, content=wave_bytes(), headers={"content-type": "audio/wav"})
         calls["chat"] += 1
         if "You assess a proposed chapter boundary" in payload["messages"][0]["content"]:
@@ -101,6 +103,35 @@ def test_end_to_end_book_to_m4b(request, book_fixture, workers, workspace, tmp_p
     config.narration.workers = 1
     convert(book, output, workspace, config)
     assert calls == before
+    text_path = workspace / "narration.txt"
+    original_json = (workspace / "narration.json").read_bytes()
+    edited = text_path.read_text().replace(
+        "The signal carries information.", "This is my corrected explanation.", 1
+    )
+    text_path.write_text(edited)
+    assert convert(book, output, workspace, config, until="narrate") == text_path
+    assert text_path.read_text() == edited
+    assert (workspace / "narration.json").read_bytes() == original_json
+    assert calls == before
+    # Both convert and synthesize use the edited text, without any new LLM calls.
+    convert(book, output, workspace, config, force=True)
+    assert calls == {"chat": before["chat"], "speech": before["speech"] + 1}
+    assert "This is my corrected explanation." in speech_inputs[-1]
+    after_edit = calls.copy()
+    synthesize_transcript(text_path, output, config)
+    assert calls == after_edit
+    # An explicitly chosen JSON input retains the old behavior and old audio cache.
+    synthesize_transcript(workspace / "narration.json", output, config, force=True)
+    assert calls == after_edit
+    assert text_path.read_text() == edited
+    config.book.title = "A different generated baseline"
+    with pytest.raises(
+        ValueError, match="Neither narration.txt nor narration.json was overwritten"
+    ):
+        convert(book, output, workspace, config, force=True)
+    assert text_path.read_text() == edited
+    assert (workspace / "narration.json").read_bytes() == original_json
+    assert calls == after_edit
 
 
 def test_offline_cli_extract(pdf_book, tmp_path, capsys, monkeypatch):
