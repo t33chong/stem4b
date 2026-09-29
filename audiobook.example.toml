@@ -18,7 +18,6 @@ model = "your-tts-model"
 voice = "your-voice"
 api_key_env = "TTS_API_KEY"
 response_format = "wav"
-speed = 1.0
 max_chars = 2500
 workers = 4
 # Omit instructions for servers/models that do not support them.

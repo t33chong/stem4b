@@ -207,10 +207,10 @@ speech calls, and a failed source review stops the conversion before TTS.
   Sections within each chapter stay sequential.
 - WAV, MP3, FLAC, Opus and AAC responses are normalized to mono 16-bit PCM. Raw `pcm`
   responses are assumed little-endian signed 16-bit mono at `tts.pcm_sample_rate`.
-- Set `tts.instructions` only when your model supports it. `tts.speed` is a request to
-  the provider. `audio.bitrate`, heading/chapter pauses and table-of-contents depth
-  control final assembly. Optional `book.title`, `book.author`, and `book.cover` override
-  source metadata. EPUB covers and the first physical PDF page are used automatically.
+- Set `tts.instructions` only when your model supports it. `audio.bitrate`,
+  heading/chapter pauses and table-of-contents depth control final assembly. Optional
+  `book.title`, `book.author`, and `book.cover` override source metadata. EPUB covers and
+  the first physical PDF page are used automatically.
 - HTTP timeouts, rate limits and server errors have bounded retries. Authentication and
   unsupported-parameter failures stop immediately. Invalid audio is kept as `.invalid`
   for diagnosis; rerunning requests a replacement.

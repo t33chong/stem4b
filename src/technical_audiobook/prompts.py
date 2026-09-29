@@ -33,8 +33,8 @@ usually become word boundaries. Do not simply omit a code listing or describe it
 
 Figures and tables: speak the number and caption, then describe what the listener cannot
 see, using the surrounding explanation to identify the point. Explain axes, relationships,
-trends, architecture and meaningful numerical comparisons. For tables describe structure
-and conclusions instead of an unexplained stream of cells; retain values needed for worked
+trends, architecture and meaningful numerical comparisons. For tables describe trends and
+conclusions instead of meticulously listing every cell; highlight values needed for worked
 examples. Avoid fabricating unreadable details. Place a figure after the complete thought
 that introduces it, never inside an unfinished sentence just because of page layout.
 

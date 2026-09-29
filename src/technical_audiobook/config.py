@@ -67,7 +67,6 @@ class TTSConfig(Endpoint):
     voice: str = "alloy"
     response_format: Literal["wav", "mp3", "flac", "opus", "aac", "pcm"] = "wav"
     pcm_sample_rate: int = Field(default=24000, ge=8000, le=192000)
-    speed: float = Field(default=1, ge=0.25, le=4)
     instructions: str | None = None
     max_chars: int = Field(default=2500, ge=32)
     workers: int = Field(default=4, ge=1, le=32)
@@ -79,7 +78,6 @@ class TTSConfig(Endpoint):
             "input",
             "voice",
             "response_format",
-            "speed",
             "instructions",
             "stream",
             "stream_format",

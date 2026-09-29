@@ -205,7 +205,6 @@ class SpeechClient(APIClient):
             "voice": self.config.voice,
             "input": text,
             "response_format": self.config.response_format,
-            "speed": self.config.speed,
             **self.config.extra_body,
         }
         if self.config.instructions:
