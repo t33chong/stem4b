@@ -279,6 +279,21 @@ def ffmetadata(
     return "\n".join(lines) + "\n"
 
 
+def package_signature(
+    title: str, author: str, chapters: list[AudioChapter], config: Config, cover_sha256: str | None
+) -> str:
+    return digest(
+        [
+            AUDIO_VERSION,
+            title,
+            author,
+            config.audio.model_dump(),
+            [(c.title, [(p.key, p.frames) for p in c.parts]) for c in chapters],
+            cover_sha256,
+        ]
+    )
+
+
 def package(
     transcript: Transcript | SpeechScript,
     chapters: list[AudioChapter],
@@ -297,15 +312,12 @@ def package(
     )
     if cover and not cover.is_file():
         raise ValueError(f"Cover image not found: {cover}")
-    signature = digest(
-        [
-            AUDIO_VERSION,
-            transcript.title,
-            transcript.author,
-            config.audio.model_dump(),
-            [(c.title, [(p.key, p.frames) for p in c.parts]) for c in chapters],
-            file_digest(cover) if cover else None,
-        ]
+    signature = package_signature(
+        transcript.title,
+        transcript.author,
+        chapters,
+        config,
+        file_digest(cover) if cover else None,
     )
     receipt = work / "output.json"
     if output.exists():
@@ -384,6 +396,10 @@ def package(
         )
         if not any(s.get("codec_name") == "aac" for s in probe.get("streams", [])):
             raise ValueError("Final audiobook has no AAC audio stream")
+        if cover and not any(
+            s.get("disposition", {}).get("attached_pic") for s in probe.get("streams", [])
+        ):
+            raise ValueError("Final audiobook is missing its requested cover artwork")
         expected_duration = (
             sum(p.frames for c in chapters for p in c.parts) / config.audio.sample_rate
         )

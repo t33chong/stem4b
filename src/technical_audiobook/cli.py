@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from . import __version__
 from .api import APIError
 from .config import load_config
+from .covers import repair_cover
 from .pipeline import convert, default_work, synthesize_transcript
 
 
@@ -38,13 +39,20 @@ def parser() -> argparse.ArgumentParser:
     speech.add_argument(
         "transcript", type=Path, help="Editable narration.txt, or an explicit JSON transcript"
     )
-    for command in (conversion, speech):
+    cover = commands.add_parser(
+        "repair-cover",
+        help="Repair an existing M4B cover offline, preserving encoded audio and a backup",
+    )
+    cover.add_argument("source", type=Path, help="Original PDF or EPUB")
+    cover.add_argument("--work-dir", type=Path, help="Original workspace (default: OUTPUT.work)")
+    for command in (conversion, speech, cover):
         command.add_argument("-o", "--output", type=Path, required=True, help="Output .m4b file")
         command.add_argument("-c", "--config", type=Path, help="TOML configuration file")
         command.add_argument("--env-file", type=Path, help="Load credentials from this .env file")
-        command.add_argument(
-            "--force", action="store_true", help="Replace an existing output if it differs"
-        )
+        if command is not cover:
+            command.add_argument(
+                "--force", action="store_true", help="Replace an existing output if it differs"
+            )
         command.add_argument("--verbose", action="store_true")
     return result
 
@@ -76,6 +84,10 @@ def main(argv: list[str] | None = None) -> int:
                 config,
                 args.until,
                 args.force,
+            )
+        elif args.command == "repair-cover":
+            result = repair_cover(
+                args.source, args.output, args.work_dir or default_work(args.output), config
             )
         else:
             result = synthesize_transcript(args.transcript, args.output, config, args.force)

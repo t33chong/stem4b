@@ -208,6 +208,12 @@ def save_narration(transcript: Transcript, work: Path):
             if baseline == transcript:
                 log.info("Preserving edited narration.txt; generated baseline is unchanged")
                 return
+            if baseline and baseline.model_dump(exclude={"cover"}) == transcript.model_dump(
+                exclude={"cover"}
+            ):
+                log.info("Updating cover metadata while preserving edited narration.txt")
+                write_json(json_path, transcript)
+                return
             raise ValueError(
                 "narration.txt contains edits and the generated baseline has changed or is missing. "
                 "Neither narration.txt nor narration.json was overwritten. To keep your text, use "

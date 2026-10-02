@@ -25,7 +25,8 @@ def test_pdf_renders_every_page_and_keeps_outline(pdf_book, workspace):
 def test_pdf_page_selection_and_scan(pdf_book, workspace, tmp_path):
     book = extract_book(pdf_book, workspace, ExtractionConfig(start_page=2, end_page=2))
     assert [u.id for u in book.units] == ["p00002"]
-    assert book.cover is None
+    assert book.cover and book.cover.label == "PDF physical page 1"
+    assert book.cover != book.units[0].images[0]
     assert book.warnings
     with pytest.raises(ValueError, match="outside"):
         extract_book(pdf_book, workspace, ExtractionConfig(end_page=4))

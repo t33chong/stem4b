@@ -184,6 +184,33 @@ review. Genuine new findings get a separate bounded revision history under
 are retained. A repeated missing-source claim after rechecking stops with a diagnostic
 instead of consuming the revision budget. No source material is automatically omitted.
 
+### Repairing missing cover artwork
+
+EPUB artwork is resolved from `cover-image` properties, legacy cover metadata (manifest
+IDs or image paths), or explicitly declared guide cover pages, including SVG wrappers.
+PDF artwork uses physical page 1 even when `extraction.start_page` selects a later page
+for narration; the cover page is not added to the narrated content. `book.cover` still
+overrides automatic selection. Missing-cover extraction caches are upgraded without
+changing source units, section IDs, or accepted narration. Cover-only metadata changes
+also preserve manual edits to `narration.txt`.
+
+To fix an already generated audiobook without new model requests or re-encoding audio:
+
+```bash
+audiobook repair-cover books/MyBook.epub -c audiobook.toml -o books/MyBook.m4b
+```
+
+Use the original PDF/EPUB and conversion workspace (`--work-dir` if needed). This offline
+command checks that the source and M4B match the workspace, reads only the cover, and
+copies the encoded audio unchanged. It verifies audio-packet hashes, duration, chapter
+titles/timings, metadata and attached artwork before replacing the output. Originals are
+kept beside the M4B as `MyBook.before-cover.m4b` and `MyBook.before-cover.output.json`.
+Existing backups are never overwritten. Repair also updates cover metadata in
+`source.json` and `narration.json`, leaving speech text, source units and speech clips
+alone. Use the original configuration to retain the final-packaging cache signature;
+if settings differ, only that signature is invalidated. Repeating an unchanged repair
+reuses the verified output.
+
 ## Final table-of-contents reconciliation
 
 At the end of `convert` (including `--until narrate`), a final pass aligns navigation
@@ -330,15 +357,15 @@ speech calls, and a failed source review stops the conversion before TTS.
 - Set `tts.instructions` only when your model supports it. `audio.bitrate`,
   heading/chapter pauses and table-of-contents depth control final assembly. Optional
   `book.title`, `book.author`, and `book.cover` override source metadata. EPUB covers and
-  the first physical PDF page are used automatically.
+  the first physical PDF page are used automatically, independently of narrated page selection.
 - HTTP timeouts, rate limits and server errors have bounded retries. Authentication and
   unsupported-parameter failures stop immediately. Invalid audio is kept as `.invalid`
   for diagnosis; rerunning requests a replacement.
 
 Clips are concatenated in source order as uniform PCM and encoded to AAC **once**. Chapter
 times are computed from sample counts, including pauses, rather than rounded per-clip
-timestamps. The completed M4B is checked with ffprobe for its audio stream, duration and
-chapter boundaries, then atomically installed at the output path.
+timestamps. The completed M4B is checked with ffprobe for its audio stream, duration,
+chapter boundaries and requested cover artwork, then atomically installed at the output path.
 
 ## Development
 

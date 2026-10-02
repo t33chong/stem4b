@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import io
+import logging
 import mimetypes
 import posixpath
 import re
@@ -23,6 +24,7 @@ from .source_toc import read_source_toc
 from .storage import asset_path, atomic_bytes, digest, file_digest, read_json, write_json
 
 EXTRACT_VERSION = 2
+log = logging.getLogger(__name__)
 
 
 def embedded_svg(data: bytes, document: str, read: Callable[[str], bytes]) -> bytes:
@@ -100,6 +102,19 @@ def save_image(data: bytes, label: str, work: Path, maximum: int, svg: bool = Fa
     return Asset(path=relative, sha256=checksum, label=label)
 
 
+def pdf_page_image(page, work: Path, config: ExtractionConfig) -> Asset:
+    scale = min(
+        config.pdf_dpi / 72,
+        config.image_max_dimension / max(page.rect.width, page.rect.height),
+    )
+    return save_image(
+        page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).tobytes("png"),
+        f"PDF physical page {page.number + 1}",
+        work,
+        config.image_max_dimension,
+    )
+
+
 def extract_pdf(source: Path, work: Path, config: ExtractionConfig) -> Book:
     units = []
     with pymupdf.open(source) as document:
@@ -115,16 +130,7 @@ def extract_pdf(source: Path, work: Path, config: ExtractionConfig) -> Book:
                 outline.setdefault(page - 1, []).append((level, title))
         for number in range(start, end):
             page = document[number]
-            scale = min(
-                config.pdf_dpi / 72,
-                config.image_max_dimension / max(page.rect.width, page.rect.height),
-            )
-            image = save_image(
-                page.get_pixmap(matrix=pymupdf.Matrix(scale, scale), alpha=False).tobytes("png"),
-                f"PDF physical page {number + 1}",
-                work,
-                config.image_max_dimension,
-            )
+            image = pdf_page_image(page, work, config)
             headings = outline.get(number, [])
             unit = SourceUnit(
                 id=f"p{number + 1:05d}",
@@ -149,7 +155,8 @@ def extract_pdf(source: Path, work: Path, config: ExtractionConfig) -> Book:
             author=metadata.get("author") or "Unknown author",
             format="pdf",
             units=units,
-            cover=units[0].images[0] if start == 0 and units else None,
+            # Artwork is metadata, independent of the pages selected for narration.
+            cover=units[0].images[0] if start == 0 else pdf_page_image(document[0], work, config),
             warnings=warnings,
         )
 
@@ -174,6 +181,118 @@ def epub_semantics(tag: Tag) -> set[str]:
     return set(values.split())
 
 
+def epub_package(archive: ZipFile):
+    # Read ZIP members directly; never extract publisher-controlled paths to disk.
+    def read(name: str) -> bytes:
+        entry = archive.getinfo(name)
+        if entry.file_size > 100_000_000:
+            raise ValueError(f"EPUB member is unexpectedly large: {name}")
+        return archive.read(name)
+
+    container = ET.fromstring(read("META-INF/container.xml"))
+    rootfile = container.find(".//{*}rootfile")
+    if rootfile is None:
+        raise ValueError("EPUB container has no package document")
+    package, _ = epub_reference("", rootfile.attrib["full-path"])
+    root = ET.fromstring(read(package))
+    manifest = {}
+    for item in root.findall(".//{*}manifest/{*}item"):
+        resource, _ = epub_reference(package, item.attrib["href"])
+        manifest[item.attrib["id"]] = (resource, item.attrib)
+    return read, package, root, manifest
+
+
+def epub_cover(archive: ZipFile, work: Path, config: ExtractionConfig) -> Asset | None:
+    read, package, root, manifest = epub_package(archive)
+    # Prefer EPUB 3 artwork, then EPUB 2 metadata (ID or nonstandard file path),
+    # then an explicitly declared guide cover page. Never guess from body figures.
+    candidates = [
+        (resource, "")
+        for resource, attrs in manifest.values()
+        if "cover-image" in attrs.get("properties", "").split()
+    ]
+    references = [
+        item.attrib.get("content", "")
+        for item in root.findall(".//{*}metadata/{*}meta")
+        if item.attrib.get("name", "").lower() == "cover"
+    ]
+    for reference in references:
+        if reference in manifest:
+            candidates.append((manifest[reference][0], ""))
+        elif reference:
+            try:
+                candidates.append(epub_reference(package, reference))
+            except ValueError as exc:
+                log.warning("Ignoring invalid EPUB cover reference: %s", exc)
+    for reference in root.findall(".//{*}guide/{*}reference"):
+        if "cover" in reference.attrib.get("type", "").lower().split():
+            try:
+                candidates.append(epub_reference(package, reference.attrib["href"]))
+            except (ValueError, KeyError) as exc:
+                log.warning("Ignoring invalid EPUB cover guide: %s", exc)
+    media_types = {resource: attrs.get("media-type", "") for resource, attrs in manifest.values()}
+    for resource, fragment in dict.fromkeys(candidates):
+        try:
+            data = read(resource)
+            is_svg = (
+                resource.lower().endswith(".svg") or media_types.get(resource) == "image/svg+xml"
+            )
+            if media_types.get(resource) in {
+                "application/xhtml+xml",
+                "text/html",
+            } or resource.lower().endswith((".xhtml", ".html", ".htm")):
+                soup = BeautifulSoup(data, "html.parser")
+                container = soup.find(id=fragment) if fragment else (soup.body or soup)
+                if container is None:
+                    raise ValueError("Cover page fragment was not found")
+                visuals = (
+                    [container]
+                    if container.name in {"img", "svg"}
+                    else container.find_all(["img", "svg"])
+                )
+                visuals = [visual for visual in visuals if not visual.find_parent("svg")]
+                if len(visuals) != 1:
+                    raise ValueError("Cover page must identify a single image or SVG")
+                visual = visuals[0]
+                if visual.name == "svg":
+                    data = embedded_svg(inline_svg_bytes(visual), resource, read)
+                    is_svg = True
+                else:
+                    src = visual.get("src", "")
+                    if src.startswith("data:image/") and ";base64," in src:
+                        header, encoded = src.split(",", 1)
+                        data = base64.b64decode(encoded, validate=True)
+                        is_svg = "svg+xml" in header
+                    else:
+                        resource, _ = epub_reference(resource, src)
+                        data = read(resource)
+                        is_svg = (
+                            resource.lower().endswith(".svg")
+                            or media_types.get(resource) == "image/svg+xml"
+                        )
+                        if is_svg:
+                            data = embedded_svg(data, resource, read)
+            elif is_svg:
+                data = embedded_svg(data, resource, read)
+            return save_image(data, "Book cover", work, config.image_max_dimension, is_svg)
+        except (ValueError, KeyError, OSError, XML.ParseError) as exc:
+            log.warning("Cannot use EPUB cover %s: %s", resource, exc)
+    return None
+
+
+def extract_cover(source: Path, work: Path, config: ExtractionConfig) -> Asset | None:
+    """Read artwork only, without extracting or changing any narration source units."""
+    if source.suffix.lower() == ".epub":
+        with ZipFile(source) as archive:
+            return epub_cover(archive, work, config)
+    if source.suffix.lower() == ".pdf":
+        with pymupdf.open(source) as document:
+            if document.needs_pass:
+                raise ValueError("This PDF is password protected; supply an unlocked copy")
+            return pdf_page_image(document[0], work, config)
+    raise ValueError("Input must be a PDF or EPUB file")
+
+
 def _blocks(node: Tag):
     """Descend wrappers without flattening tables, code, lists, math, or figures."""
     atomic = {"p", "pre", "table", "figure", "ul", "ol", "dl", "blockquote", "math", "svg", "img"}
@@ -193,23 +312,7 @@ def extract_epub(source: Path, work: Path, config: ExtractionConfig) -> Book:
         raise ValueError("Physical page selection applies to PDFs, not reflowable EPUBs")
     warnings: list[str] = []
     with ZipFile(source) as archive:
-        # Read ZIP members directly; never extract publisher-controlled paths to disk.
-        def read(name: str) -> bytes:
-            entry = archive.getinfo(name)
-            if entry.file_size > 100_000_000:
-                raise ValueError(f"EPUB member is unexpectedly large: {name}")
-            return archive.read(name)
-
-        container = ET.fromstring(read("META-INF/container.xml"))
-        rootfile = container.find(".//{*}rootfile")
-        if rootfile is None:
-            raise ValueError("EPUB container has no package document")
-        package, _ = epub_reference("", rootfile.attrib["full-path"])
-        root = ET.fromstring(read(package))
-        manifest = {}
-        for item in root.findall(".//{*}manifest/{*}item"):
-            resource, _ = epub_reference(package, item.attrib["href"])
-            manifest[item.attrib["id"]] = (resource, item.attrib)
+        read, package, root, manifest = epub_package(archive)
         spine = root.find("{*}spine")
         if spine is None:
             raise ValueError("EPUB package has no reading-order spine")
@@ -374,28 +477,7 @@ def extract_epub(source: Path, work: Path, config: ExtractionConfig) -> Book:
                     )
                 )
 
-        cover = None
-        cover_id = next(
-            (
-                item.attrib.get("content")
-                for item in root.findall(".//{*}meta")
-                if item.attrib.get("name") == "cover"
-            ),
-            None,
-        )
-        for item_id, (resource, attrs) in manifest.items():
-            if "cover-image" in attrs.get("properties", "").split() or item_id == cover_id:
-                cover_bytes = read(resource)
-                if resource.lower().endswith(".svg"):
-                    cover_bytes = embedded_svg(cover_bytes, resource, read)
-                cover = save_image(
-                    cover_bytes,
-                    "Book cover",
-                    work,
-                    config.image_max_dimension,
-                    resource.lower().endswith(".svg"),
-                )
-                break
+        cover = epub_cover(archive, work, config)
         title = root.find(".//{*}metadata/{*}title")
         authors = root.findall(".//{*}metadata/{*}creator")
         return Book(
@@ -417,12 +499,19 @@ def extract_book(source: Path, work: Path, config: ExtractionConfig) -> Book:
     if cached.exists():
         book = Book.model_validate(read_json(cached))
         assets = [image for unit in book.units for image in unit.images]
-        if book.cover:
-            assets.append(book.cover)
         if all(
             asset_path(work, a.path).is_file() and file_digest(asset_path(work, a.path)) == a.sha256
             for a in assets
         ):
+            if (
+                book.cover is None
+                or not asset_path(work, book.cover.path).is_file()
+                or file_digest(asset_path(work, book.cover.path)) != book.cover.sha256
+            ):
+                # Migrate old missing-cover caches without changing source units,
+                # their IDs, page selection, or accepted narration checkpoint keys.
+                book.cover = extract_cover(source, work, config)
+                write_json(cached, book)
             # Refresh navigation separately, keeping every source-unit/cache identity
             # unchanged for workspaces created before TOC reconciliation existed.
             book.toc = read_source_toc(source, book)
