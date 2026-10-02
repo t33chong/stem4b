@@ -7,8 +7,19 @@ from technical_audiobook.api import TruncatedResponse
 from technical_audiobook.chapters import BoundaryDecision, ChapterPlanner, chapter_candidates
 from technical_audiobook.chunking import plan_chunks
 from technical_audiobook.config import Config, LLMConfig, NarrationConfig
-from technical_audiobook.models import Book, Coverage, Draft, Finding, Review, Segment, SourceUnit
+from technical_audiobook.models import (
+    Book,
+    Coverage,
+    Draft,
+    Finding,
+    Review,
+    Segment,
+    SourceToc,
+    SourceUnit,
+    TocEntry,
+)
 from technical_audiobook.narration import Narrator
+from technical_audiobook.storage import read_json, write_json
 
 
 def chapter_book():
@@ -147,6 +158,153 @@ def test_wrong_boundary_id_is_rejected(workspace):
     with pytest.raises(ValueError, match="candidate source"):
         ChapterPlanner(WrongID(), config, workspace).plan(book, plan_chunks(book, config.narration))
     assert not list((workspace / "chapter-boundaries").glob("*.json"))
+
+
+def add_toc(book):
+    book.toc = SourceToc(
+        kind="epub_ncx",
+        entries=[
+            TocEntry(title="First", level=1, target="one", source_id="one"),
+            TocEntry(title="Subsection", level=2, target="two", source_id="two"),
+            TocEntry(title="Second", level=1, target="three", source_id="three"),
+        ],
+    )
+
+
+@pytest.mark.parametrize("kind", ["epub_ncx", "epub_nav", "pdf_outline"])
+def test_candidates_prefer_toc_to_flat_heading_tags(kind):
+    book, config = chapter_book(), chapter_config()
+    for unit in book.units:
+        unit.heading, unit.heading_level = unit.id, 1
+    add_toc(book)
+    book.toc.kind = kind
+    chunks = plan_chunks(book, config.narration)
+    assert len(chapter_candidates(chunks)) == 3
+    assert [c.id for c in chapter_candidates(chunks, book)] == ["00003"]
+    # The TOC does not need an accompanying h1 tag to nominate a boundary.
+    book.units[2].heading_level = 2
+    assert [c.id for c in chapter_candidates(chunks, book)] == ["00003"]
+    book.toc.entries[2].selected = False
+    assert chapter_candidates(chunks, book) == []
+
+
+def test_candidates_do_not_split_chunks_or_promote_nested_toc_entries():
+    book, config = chapter_book(), chapter_config()
+    add_toc(book)
+    # The top-level destination is inside the first chunk; retaining the whole
+    # partition is safer than treating the unrelated h1 at unit three as a chapter.
+    book.toc.entries[2].source_id = "two"
+    config.narration.max_pdf_pages = 2
+    chunks = plan_chunks(book, config.narration)
+    assert len(chunks) == 2
+    assert chapter_candidates(chunks, book) == []
+    for entry in book.toc.entries:
+        entry.source_id = None
+    assert chapter_candidates(chunks, book) == chapter_candidates(chunks)
+
+
+class BoundaryLLM(TestLLM):
+    def respond(self, messages, schema, purpose):
+        if schema is not BoundaryDecision:
+            return super().respond(messages, schema, purpose)
+        candidate = next(
+            json.loads(part["text"])
+            for part in messages[1]["content"]
+            if part.get("type") == "text" and part["text"].startswith('{"role": "CANDIDATE')
+        )
+        return BoundaryDecision(
+            source_id=candidate["source_id"],
+            independent=True,
+            title=candidate["heading_hint"],
+            reason="Verified independent source start.",
+        )
+
+
+def test_boundary_checks_overlap_but_plan_stays_source_ordered(workspace):
+    barrier, second_done = threading.Barrier(2), threading.Event()
+
+    class ConcurrentChecks(BoundaryLLM):
+        def respond(self, messages, schema, purpose):
+            barrier.wait(timeout=5)
+            if purpose == "boundary:00003":
+                assert second_done.wait(timeout=5)
+            else:
+                second_done.set()
+            return super().respond(messages, schema, purpose)
+
+    book, config = chapter_book(), chapter_config()
+    book.units[3].heading, book.units[3].heading_level = "Another major division", 1
+    chunks = plan_chunks(book, config.narration)
+    client = ConcurrentChecks()
+    jobs = ChapterPlanner(client, config, workspace).plan(book, chunks)
+    assert {"boundary:00003", "boundary:00004"} == set(client.calls)
+    assert [job.id for job in jobs] == ["00001", "00003", "00004"]
+    saved = read_json(workspace / "chapter-plan.json")
+    assert [d["source_id"] for d in saved["boundaries"]] == ["three", "four"]
+
+
+def test_interrupted_boundary_checks_reuse_finished_checks(workspace):
+    barrier = threading.Barrier(2)
+
+    class FailingChecks(BoundaryLLM):
+        def respond(self, messages, schema, purpose):
+            barrier.wait(timeout=5)
+            if purpose == "boundary:00004":
+                raise RuntimeError("Boundary provider failure")
+            return super().respond(messages, schema, purpose)
+
+    book, config = chapter_book(), chapter_config()
+    book.units[3].heading, book.units[3].heading_level = "Another major division", 1
+    chunks = plan_chunks(book, config.narration)
+    with pytest.raises(RuntimeError, match="provider failure"):
+        ChapterPlanner(FailingChecks(), config, workspace).plan(book, chunks)
+    assert not (workspace / "chapter-plan.json").exists()
+    assert len(list((workspace / "chapter-boundaries").glob("*.json"))) == 1
+    client = BoundaryLLM()
+    jobs = ChapterPlanner(client, config, workspace).plan(book, chunks)
+    assert client.calls == ["boundary:00004"]
+    assert [job.id for job in jobs] == ["00001", "00003", "00004"]
+
+
+def test_toc_filter_preserves_legacy_partition_and_accepted_chapters(workspace):
+    book, config = chapter_book(), chapter_config()
+    book.units[1].heading, book.units[1].heading_level = "Subsection", 1
+    chunks = plan_chunks(book, config.narration)
+    # Reproduce the pre-filter partition and independent chapter contexts.
+    jobs = ChapterPlanner(BoundaryLLM(), config, workspace).plan(book, chunks)
+    narrator = Narrator(TestLLM(), config, workspace)
+    for job in jobs:
+        narrator._narrate_chapter(job, [], threading.Event())
+    saved = {p: p.read_bytes() for p in (workspace / "narration").glob("*/accepted.json")}
+    assert len(saved) == 4
+    add_toc(book)
+    assert [c.id for c in chapter_candidates(chunks, book)] == ["00003"]
+
+    class NoRequests(TestLLM):
+        def generate(self, *args, **kwargs):
+            raise AssertionError("Compatible legacy jobs must keep their accepted context")
+
+    for workers in (1, 3):
+        config.narration.workers = workers
+        assert ChapterPlanner(NoRequests(), config, workspace).plan(book, chunks) == jobs
+        narrator = Narrator(NoRequests(), config, workspace)
+        for job in jobs:
+            narrator._narrate_chapter(job, [], threading.Event())
+    assert all(p.read_bytes() == data for p, data in saved.items())
+
+    # Matching section IDs alone are insufficient when the source partition differs.
+    original = read_json(workspace / "chapter-plan.json")
+    altered = read_json(workspace / "chapter-plan.json")
+    altered["jobs"][0]["chunk_ids"] = ["other"]
+    write_json(workspace / "chapter-plan.json", altered)
+    filtered = ChapterPlanner(NoRequests(), config, workspace).plan(book, chunks)
+    assert [job.id for job in filtered] == ["00001", "00003"]
+    # Likewise never reuse an old boundary for a different model or evidence.
+    write_json(workspace / "chapter-plan.json", original)
+    config.llm.model = "different-model"
+    client = BoundaryLLM()
+    ChapterPlanner(client, config, workspace).plan(book, chunks)
+    assert client.calls == ["boundary:00003"]
 
 
 def test_truncated_boundary_check_stays_sequential_on_resume(workspace):

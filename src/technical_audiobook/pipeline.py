@@ -93,7 +93,7 @@ def convert(
                     cover_path.suffix.lower() == ".svg",
                 )
             chunks = plan_chunks(book, config.narration)
-            candidates = chapter_candidates(chunks)
+            candidates = chapter_candidates(chunks, book)
             write_json(
                 work / "plan.json",
                 {

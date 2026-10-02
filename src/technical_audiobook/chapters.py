@@ -3,8 +3,10 @@
 import base64
 import json
 import logging
+from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from threading import Event
 
 from pydantic import Field
 
@@ -53,8 +55,19 @@ class ChapterJob:
     chunks: list[Chunk]
 
 
-def chapter_candidates(chunks: list[Chunk]) -> list[Chunk]:
+def chapter_candidates(chunks: list[Chunk], book: Book | None = None) -> list[Chunk]:
     # Keep the existing source partitions and chunk IDs unchanged for resume.
+    if book is not None:
+        entries = [entry for entry in book.toc.entries if entry.selected]
+        level = min((entry.level for entry in entries), default=1)
+        destinations = {
+            entry.source_id for entry in entries if entry.level == level and entry.source_id
+        }
+        if destinations:
+            # EPUB heading tags often flatten every subsection to h1. The source
+            # TOC is a better candidate list, but is still not proof of independence.
+            # Do not split a unit/chunk to manufacture a boundary at an interior target.
+            return [c for c in chunks[1:] if c.units[0].id in destinations]
     return [c for c in chunks[1:] if c.units[0].heading and c.units[0].heading_level == 1]
 
 
@@ -161,19 +174,89 @@ class ChapterPlanner:
         write_json(target, result)
         return result
 
+    def _resumed_decisions(
+        self, book: Book, chunks: list[Chunk]
+    ) -> list[tuple[Chunk, BoundaryDecision]] | None:
+        """Retain a compatible partition, including pre-TOC-filtering boundaries.
+
+        Changing the partition of an existing parallel run would change accepted
+        narration context. Validate every old decision against its exact input cache
+        key, not just the book hash or section number. A one-job plan remains eligible
+        for parallelization when the user first enables workers.
+        """
+        target = self.work / "chapter-plan.json"
+        if not target.is_file():
+            return None
+        plan = read_json(target)
+        jobs = plan.get("jobs", [])
+        if (
+            plan.get("source_sha256") != book.source_sha256
+            or len(jobs) < 2
+            or [cid for job in jobs for cid in job["chunk_ids"]] != [c.id for c in chunks]
+        ):
+            return None
+        by_source = {chunk.units[0].id: chunk for chunk in chunks[1:]}
+        decisions = []
+        for saved in plan.get("boundaries", []):
+            result = BoundaryDecision.model_validate(saved)
+            candidate = by_source.get(result.source_id)
+            if candidate is None or self.decision(candidate, allow_requests=False) != result:
+                return None
+            decisions.append((candidate, result))
+        if [c.id for c, result in decisions if result.independent] != [
+            job["id"] for job in jobs[1:]
+        ]:
+            return None
+        log.info("Preserving %s existing chapter jobs and their narration contexts", len(jobs))
+        return decisions
+
+    def _check_candidates(self, candidates: list[Chunk]) -> list[tuple[Chunk, BoundaryDecision]]:
+        if not candidates:
+            return []
+        if self.config.narration.workers == 1:
+            return [
+                (candidate, result)
+                for candidate in candidates
+                if (result := self.decision(candidate, allow_requests=False)) is not None
+            ]
+        workers = min(self.config.narration.workers, len(candidates))
+        log.info("Checking %s chapter candidates with up to %s workers", len(candidates), workers)
+        stop = Event()
+
+        def check(candidate: Chunk):
+            if stop.is_set():
+                raise CancelledError("Boundary planning stopped; completed checks remain cached")
+            return self.decision(candidate, allow_requests=True)
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="boundary") as executor:
+            futures = {executor.submit(check, candidate): candidate for candidate in candidates}
+            try:
+                for future in as_completed(futures):
+                    results[futures[future].id] = future.result()
+            except BaseException:
+                stop.set()
+                for future in futures:
+                    future.cancel()
+                log.warning("Stopping boundary workers; completed checks remain cached")
+                raise
+        # Completion order must never affect chapter order or the saved partition.
+        return [(candidate, results[candidate.id]) for candidate in candidates]
+
     def plan(self, book: Book, chunks: list[Chunk]) -> list[ChapterJob]:
         if not chunks:
             raise ValueError("Cannot plan chapters for an empty book")
         starts = {}
         decisions = []
-        for candidate in chapter_candidates(chunks):
-            result = self.decision(candidate, allow_requests=self.config.narration.workers > 1)
-            if result is not None:
-                decisions.append(result.model_dump())
-                if result.independent:
-                    starts[candidate.id] = result.title
-                else:
-                    log.info("Keeping %s in its preceding job: %s", candidate.id, result.reason)
+        checked = self._resumed_decisions(book, chunks)
+        if checked is None:
+            checked = self._check_candidates(chapter_candidates(chunks, book))
+        for candidate, result in checked:
+            decisions.append(result.model_dump())
+            if result.independent:
+                starts[candidate.id] = result.title
+            else:
+                log.info("Keeping %s in its preceding job: %s", candidate.id, result.reason)
         jobs = [ChapterJob(chunks[0].id, chunks[0].units[0].heading or book.title, [])]
         for chunk in chunks:
             if chunk.id in starts:

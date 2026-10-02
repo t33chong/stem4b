@@ -174,6 +174,16 @@ prompt and context changes still invalidate the affected narration. Logs disting
 `Processing section` (checking a checkpoint) from `Reusing narration` and `Narrating section`
 (making a new model request).
 
+If a review incorrectly claims primary source text was not supplied, the application
+checks that text against the outgoing payload and requests a fresh **full-section**
+review with the disputed text repeated beside the draft. This also repairs saved loops:
+the earliest affected draft is rechecked before replaying later revisions that may have
+omitted material in response to the erroneous finding. Approval still requires a passing
+review. Genuine new findings get a separate bounded revision history under
+`narration/<section-cache>/source-recheck-*/`; the original history and accepted sections
+are retained. A repeated missing-source claim after rechecking stops with a diagnostic
+instead of consuming the revision budget. No source material is automatically omitted.
+
 ## Final table-of-contents reconciliation
 
 At the end of `convert` (including `--until narrate`), a final pass aligns navigation
@@ -232,8 +242,12 @@ To narrate independent chapters concurrently, set this in your TOML configuratio
 workers = 4
 ```
 
-The default is `1`. PDF top-level outline entries and EPUB top-level headings provide
-candidate chapter starts. Before launching independent jobs, the LLM examines the source
+The default is `1`. Resolved top-level entries in the PDF outline or EPUB navigation/NCX
+table of contents provide candidate chapter starts. Top-level extracted headings are a
+fallback when no top-level TOC destinations can be resolved; this avoids mistaking hundreds
+of EPUB subsection `h1` tags for chapters. Only destinations at existing chunk starts are
+eligible, so selecting candidates never changes source chunks or section IDs.
+Before launching independent jobs, the LLM examines the source
 on both sides of each candidate, including page images, to check that a new chapter starts
 cleanly and no paragraph, equation, code listing, table or footnote continues across it.
 A chapter beginning partway through a PDF page cannot be separated by this version.
@@ -249,11 +263,18 @@ are assembled in book order, even when later chapters finish first.
 `plan.json` lists chapter candidates during offline extraction. Boundary checks happen
 only during narration, add at most one initial logical request per uncached candidate
 (API/schema retries can add calls), and are saved in `chapter-boundaries/`.
+Independent boundary checks run concurrently, bounded by `narration.workers`, with the
+same complete neighboring evidence as sequential checks. They do not use generated
+narration. Their results are assembled in source order; interrupted planning reuses
+finished checks on restart. One worker makes no new boundary requests.
 `chapter-plan.json` records verified boundaries, rejected candidates and the resulting
 jobs. Boundary validation is a model judgment, not a guarantee; inspect its reasons and
 review representative output when choosing a model. Inconclusive checks (including
 truncated responses or evidence exceeding the input budget) are cached as rejected
 boundaries too, so a restart does not silently change the chapter partition.
+Compatible existing multi-job plans retain their partition, including splits accepted
+before TOC-based candidate filtering was added, to preserve accepted narration contexts.
+Consequently, a resumed legacy run may have more jobs than a fresh conversion of the book.
 
 Worker count does not invalidate narration. When enabling workers in a partially narrated
 book, chapters already started sequentially retain their original accepted context and
