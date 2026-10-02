@@ -9,8 +9,10 @@ from .api import LLMClient, TruncatedResponse
 from .chapters import ChapterJob, ChapterPlanner
 from .chunking import Chunk
 from .config import Config
+from .front_matter import review_front_matter
 from .models import Book, Draft, Review, Segment, Transcript
-from .narration_text import render_text, save_narration
+from .narration_text import load_script, render_text, save_narration
+from .navigation import reconcile_toc, validate_published_navigation, validate_source_destinations
 from .prompts import NARRATION_POLICY, REVIEW_POLICY
 from .storage import asset_path, atomic_text, digest, read_json, write_json
 
@@ -374,6 +376,7 @@ class Narrator:
         return drafts
 
     def narrate(self, book: Book, chunks: list[Chunk]) -> Transcript:
+        validate_source_destinations(book, self.config, self.work)
         jobs = ChapterPlanner(self.client, self.config, self.work).plan(book, chunks)
         seeds = self._chapter_seeds(jobs) if len(jobs) > 1 else {}
         stop = Event()
@@ -424,7 +427,12 @@ class Narrator:
             warnings=warnings,
             cover=book.cover,
         )
+        omitted = review_front_matter(self.client, transcript, book, self.config, self.work)
+        transcript = reconcile_toc(transcript, book, self.config, self.work, omitted)
         save_narration(transcript, self.work)
+        validate_published_navigation(
+            transcript, load_script(self.work / "narration.txt"), self.config, self.work
+        )
         return transcript
 
 

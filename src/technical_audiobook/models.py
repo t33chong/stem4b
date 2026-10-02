@@ -25,6 +25,22 @@ class SourceUnit(Model):
     heading_level: int = 0
 
 
+class TocEntry(Model):
+    title: str = Field(min_length=1)
+    level: int = Field(ge=1)
+    target: str
+    source_id: str | None = None
+    selected: bool = True
+    reason: str = ""
+
+
+class SourceToc(Model):
+    kind: Literal["none", "pdf_outline", "epub_nav", "epub_ncx"] = "none"
+    source_title: str = ""
+    entries: list[TocEntry] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class Book(Model):
     schema_version: int = 1
     source_sha256: str
@@ -34,6 +50,7 @@ class Book(Model):
     units: list[SourceUnit]
     cover: Asset | None = None
     warnings: list[str] = Field(default_factory=list)
+    toc: SourceToc = Field(default_factory=SourceToc)
 
 
 class Segment(Model):

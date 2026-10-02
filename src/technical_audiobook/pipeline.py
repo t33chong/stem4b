@@ -105,6 +105,8 @@ def convert(
                     "source_images": sum(len(u.images) for u in book.units),
                     "baseline_llm_requests": len(chunks) * (2 if config.narration.review else 1),
                     "narration_workers": config.narration.workers,
+                    "source_toc": book.toc.kind,
+                    "source_toc_entries": len(book.toc.entries),
                     "chapter_boundary_requests_if_uncached": (
                         len(candidates) if config.narration.workers > 1 else 0
                     ),

@@ -19,6 +19,7 @@ from PIL import Image, ImageOps
 
 from .config import ExtractionConfig
 from .models import Asset, Book, SourceUnit
+from .source_toc import read_source_toc
 from .storage import asset_path, atomic_bytes, digest, file_digest, read_json, write_json
 
 EXTRACT_VERSION = 2
@@ -422,12 +423,16 @@ def extract_book(source: Path, work: Path, config: ExtractionConfig) -> Book:
             asset_path(work, a.path).is_file() and file_digest(asset_path(work, a.path)) == a.sha256
             for a in assets
         ):
+            # Refresh navigation separately, keeping every source-unit/cache identity
+            # unchanged for workspaces created before TOC reconciliation existed.
+            book.toc = read_source_toc(source, book)
             write_json(work / "source.json", book)
             return book
     extractor = extract_pdf if source.suffix.lower() == ".pdf" else extract_epub
     book = extractor(source, work, config)
     if not book.units:
         raise ValueError("No source content was extracted")
+    book.toc = read_source_toc(source, book)
     write_json(cached, book)
     write_json(work / "source.json", book)
     return book

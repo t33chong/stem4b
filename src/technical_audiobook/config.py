@@ -113,6 +113,13 @@ class NarrationConfig(Model):
     instructions_file: str | None = None
 
 
+class NavigationConfig(Model):
+    reconcile: bool = True
+    # PDF navigation labels omit "CHAPTER"; EPUB labels retain it when supplied.
+    chapter_prefix: Literal["auto", "keep", "omit"] = "auto"
+    omit_front_matter: bool = True
+
+
 class AudioConfig(Model):
     sample_rate: int = Field(default=24000, ge=8000, le=48000)
     bitrate: str = "64k"
@@ -139,6 +146,7 @@ class Config(Model):
     tts: TTSConfig = Field(default_factory=TTSConfig)
     extraction: ExtractionConfig = Field(default_factory=ExtractionConfig)
     narration: NarrationConfig = Field(default_factory=NarrationConfig)
+    navigation: NavigationConfig = Field(default_factory=NavigationConfig)
     audio: AudioConfig = Field(default_factory=AudioConfig)
     book: BookConfig = Field(default_factory=BookConfig)
     pronunciations: dict[str, str] = Field(default_factory=dict)

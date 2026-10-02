@@ -174,6 +174,55 @@ prompt and context changes still invalidate the affected narration. Logs disting
 `Processing section` (checking a checkpoint) from `Reusing narration` and `Narrating section`
 (making a new model request).
 
+## Final table-of-contents reconciliation
+
+At the end of `convert` (including `--until narrate`), a final pass aligns navigation
+headings with the source's PDF bookmarks or EPUB navigation/NCX TOC. It reads the full
+hierarchy and destinations separately from extraction batches, including multiple PDF
+headings on the same page and EPUB subsections. It does not invalidate accepted section
+checkpoints or ask the LLM to rewrite chapters.
+
+- Display titles and nesting follow the source TOC. Numbered labels get a period after
+  the number: `2.10.1. Earth Ground`. Spoken headings consistently use number words:
+  `Section two point ten point one. Earth Ground.` Previously reviewed verbalizations
+  of the title itself are retained when they correspond to the source title.
+- By default, PDF chapter labels omit the `CHAPTER` prefix (`2. Theory`); EPUB labels
+  retain that prefix when supplied by the source (`CHAPTER 2. Theory`). Both are spoken
+  as `Chapter two. Theory.` Set `navigation.chapter_prefix` to `keep` or `omit` to override.
+- Body headings absent from the source TOC become ordinary spoken paragraphs. Their
+  words and the explanations beneath them are retained, but they no longer create
+  navigation entries. `audio.toc_depth` still limits which source levels appear in M4B.
+- Already omitted content, such as excluded homework, does not acquire empty navigation
+  entries. Missing headings are restored only at unambiguous source starts. Unresolved
+  destinations, ambiguous placements or inconsistent ordering stop conversion with a
+  `toc-report.json` diagnostic; no final narration is overwritten by that reconciliation.
+- Without a machine-readable TOC, generated headings remain in place with standardized
+  numbering and an explicit warning. This version does not infer a TOC from printed
+  contents-page images. Set `navigation.reconcile = false` to disable the pass.
+
+An optional front-matter check considers only the prefix before the first substantive
+TOC entry. It may remove covers, copyright, author biographies, credits, promotional
+material and printed contents lists **only when the complete source evidence is approved
+as noninstructional**. A book-title entry alone is not grounds to delete its content.
+Forewords, prefaces, introductions and learning guidance are retained. Ambiguous,
+truncated or over-budget evidence is retained too, as are segments crossing into useful
+content. This bounded check uses the configured LLM, may add one initial logical request
+(plus API/schema retries), and caches its decision in `toc-front-matter/`. Set
+`navigation.omit_front_matter = false` to skip it. Model decisions still merit inspection.
+
+`toc-report.json` records matching, restored/demoted headings, omissions and the planned
+M4B navigation. If useful or unverified speech is retained before the first included TOC
+heading, the report explicitly flags the additional opening M4B entry rather than silently
+discarding that speech. Navigation metadata is refreshed for existing extraction caches without
+changing source-unit IDs. Rerun your existing conversion with `--until narrate` to apply
+the pass to cached narration before spending on speech.
+
+Manual text edits remain protected. If reconciliation changes the generated baseline
+while `narration.txt` contains edits, conversion stops for you to reconcile those versions.
+If only your edited script's headings or opening navigation differ, conversion also reports
+the conflict without overwriting your edits. Explicit `synthesize narration.txt` continues
+to honor your script as written, without re-running TOC alignment or source review.
+
 ## Concurrent chapter narration
 
 To narrate independent chapters concurrently, set this in your TOML configuration:
@@ -226,6 +275,7 @@ Useful workspace files:
 | `source.json`, `source/assets/` | Source evidence and page/figure images |
 | `plan.json` | Ordered source batches and initial request estimate |
 | `chapter-boundaries/`, `chapter-plan.json` | Cached source checks and independent narration jobs |
+| `toc-report.json`, `toc-front-matter/` | Final source-TOC audit and cached front-matter review |
 | `narration/*/draft-*.json`, `review-*.json` | Inspectable draft/review history |
 | `narration.txt` | Editable canonical speech script, with navigation headings |
 | `narration.json` | Generated narration baseline, source coverage and cover metadata |

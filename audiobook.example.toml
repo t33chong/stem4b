@@ -45,6 +45,15 @@ include_exercises = false
 # Optional file adds book-specific instructions to the built-in narration policy.
 # instructions_file = "book-instructions.md"
 
+[navigation]
+# Final pass matches navigation to the PDF outline / EPUB nav or NCX TOC.
+reconcile = true
+# auto: omit CHAPTER in PDF labels; retain it in EPUB labels when present in the TOC.
+# Alternatives: keep, omit. Spoken headings always include Chapter/Section and number words.
+chapter_prefix = "auto"
+# One bounded, cached source check may omit a clearly noninstructional front prefix.
+omit_front_matter = true
+
 [audio]
 sample_rate = 24000
 bitrate = "64k"
