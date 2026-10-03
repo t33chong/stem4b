@@ -40,10 +40,16 @@ class Endpoint(Model):
 
 class LLMConfig(Endpoint):
     api_key_env: str = "LLM_API_KEY"
+    service_tier: str | None = Field(default=None, min_length=1)
     max_output_tokens: int = Field(default=16000, ge=256)
     token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
     json_mode: Literal["json_object", "prompt"] = "json_object"
     temperature: float | None = Field(default=None, ge=0, le=2)
+
+    def cache_options(self) -> dict:
+        # Processing tier affects scheduling/pricing, not accepted narration content.
+        # Omitting it also preserves the exact keys of pre-SDK checkpoints.
+        return self.model_dump(exclude={"service_tier"})
 
     @model_validator(mode="after")
     def reserved_options(self):
@@ -59,6 +65,8 @@ class LLMConfig(Endpoint):
         }
         if reserved.intersection(self.extra_body):
             raise ValueError("llm.extra_body cannot override core request fields")
+        if self.service_tier is not None and "service_tier" in self.extra_body:
+            raise ValueError("Set service_tier in llm or llm.extra_body, not both")
         return self
 
 
@@ -162,7 +170,11 @@ class Config(Model):
 def load_config(path: Path | None = None) -> Config:
     data = tomllib.loads(path.read_text(encoding="utf-8")) if path else {}
     for section in ("llm", "tts"):
-        for name in ("base_url", "model", "voice") if section == "tts" else ("base_url", "model"):
+        for name in (
+            ("base_url", "model", "voice")
+            if section == "tts"
+            else ("base_url", "model", "service_tier")
+        ):
             value = os.getenv(f"{section}_{name}".upper())
             if value:
                 data.setdefault(section, {})[name] = value

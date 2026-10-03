@@ -2,8 +2,9 @@ import logging
 from pathlib import Path
 
 from filelock import FileLock, Timeout
+from openai import OpenAI
 
-from .api import LLMClient, SpeechClient
+from .api import client_options
 from .audio import package, require_ffmpeg, speech_plan, synthesize
 from .chapters import chapter_candidates
 from .chunking import plan_chunks
@@ -50,11 +51,8 @@ def render_transcript(
     if config.book.author:
         transcript.author = config.book.author
     plan = speech_plan(transcript, config)
-    client = SpeechClient(config.tts, work)
-    try:
+    with OpenAI(**client_options(config.tts)) as client:
         synthesize(plan, client, config, work)
-    finally:
-        client.close()
     if until == "audio":
         return work / "audio.json"
     return package(transcript, plan, config, work, output, force)
@@ -123,11 +121,8 @@ def convert(
                 log.warning("%s", warning)
             if until == "extract":
                 return work / "plan.json"
-            client = LLMClient(config.llm, work)
-            try:
+            with OpenAI(**client_options(config.llm)) as client:
                 Narrator(client, config, work).narrate(book, chunks)
-            finally:
-                client.close()
             if until == "narrate":
                 return work / "narration.txt"
             transcript = load_script(work / "narration.txt")

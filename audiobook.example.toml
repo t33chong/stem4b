@@ -3,6 +3,10 @@ base_url = "http://localhost:4000/v1"
 model = "your-vision-model"
 api_key_env = "LLM_API_KEY"
 timeout_seconds = 300
+# Optional Chat Completions processing tier; omitted by default for compatibility.
+# service_tier = "flex"
+# Flex may need a longer timeout, e.g. 900 seconds for a new conversion.
+# Requests never automatically fall back to a more expensive tier.
 max_output_tokens = 16000
 # Use "max_completion_tokens" for endpoints that require it.
 token_parameter = "max_tokens"

@@ -12,12 +12,22 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .api import SpeechClient
+from openai import OpenAI
+
+from .api import record_request, request_headers
 from .chunking import split_speech
-from .config import Config
+from .config import Config, TTSConfig
 from .models import Transcript
 from .narration_text import SpeechScript
-from .storage import asset_path, atomic_text, digest, file_digest, read_json, write_json
+from .storage import (
+    asset_path,
+    atomic_bytes,
+    atomic_text,
+    digest,
+    file_digest,
+    read_json,
+    write_json,
+)
 
 log = logging.getLogger(__name__)
 AUDIO_VERSION = 1
@@ -138,8 +148,39 @@ def wav_frames(path: Path, sample_rate: int) -> int:
         return frames
 
 
+def synthesize_speech(client: OpenAI, config: TTSConfig, work: Path, text: str, destination: Path):
+    config.require_model()
+    if not text.strip() or len(text) > config.max_chars:
+        raise ValueError("Speech input is empty or exceeds tts.max_chars")
+    options = {"instructions": config.instructions} if config.instructions else {}
+    # Receive one bounded clip in full so the SDK also retries interrupted body reads.
+    # Nothing is published until the complete response has passed basic validation.
+    response = client.audio.speech.with_raw_response.create(
+        model=config.model,
+        voice=config.voice,
+        input=text,
+        response_format=config.response_format,
+        extra_body=config.extra_body,
+        extra_headers=request_headers(config),
+        **options,
+    )
+    # The eager SDK response has already consumed and closed the network stream.
+    content_type = response.headers.get("content-type", "").lower()
+    if any(kind in content_type for kind in ("json", "text/", "html")):
+        raise ValueError(
+            "Speech endpoint returned text/JSON instead of audio bytes "
+            f"(request ID: {response.headers.get('x-request-id', 'unavailable')}).\n"
+            f"Provider response body:\n{response.text or '<empty body>'}"
+        )
+    payload = response.content
+    if not payload:
+        raise ValueError("Speech endpoint returned empty audio")
+    atomic_bytes(destination, payload)
+    record_request(work, config, "speech", {"characters": len(text)})
+
+
 def synthesize_part(
-    part: SpeechPart, client: SpeechClient, config: Config, work: Path
+    part: SpeechPart, client: OpenAI, config: Config, work: Path
 ) -> tuple[Path, int]:
     directory = work / "audio"
     directory.mkdir(parents=True, exist_ok=True)
@@ -156,7 +197,7 @@ def synthesize_part(
     # should not require another paid speech request.
     raw = directory / f"{part.key}.source.{config.tts.response_format}"
     if not raw.exists() or raw.stat().st_size == 0:
-        client.synthesize(part.text, raw)
+        synthesize_speech(client, config.tts, work, part.text, raw)
     with tempfile.TemporaryDirectory(prefix=".normalize-", dir=directory) as temporary:
         normalized = Path(temporary) / "clip.wav"
         command = ["ffmpeg", "-v", "error", "-nostdin", "-y"]
@@ -205,7 +246,7 @@ def synthesize_part(
     return target, frames
 
 
-def synthesize(chapters: list[AudioChapter], client: SpeechClient, config: Config, work: Path):
+def synthesize(chapters: list[AudioChapter], client: OpenAI, config: Config, work: Path):
     require_ffmpeg()
     unique = {part.key: part for chapter in chapters for part in chapter.parts}
     completed = {}

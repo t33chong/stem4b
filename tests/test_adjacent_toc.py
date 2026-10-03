@@ -17,6 +17,8 @@ from technical_audiobook.narration_text import load_script
 from technical_audiobook.navigation import reconcile_toc
 from technical_audiobook.storage import read_json, write_json
 
+pytestmark = pytest.mark.usefixtures("scripted_generation")
+
 TITLE = "Hierarchical Structures"
 
 

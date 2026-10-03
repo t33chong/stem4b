@@ -27,6 +27,8 @@ from technical_audiobook.navigation import (
 )
 from technical_audiobook.storage import read_json, write_json
 
+pytestmark = pytest.mark.usefixtures("scripted_generation")
+
 
 def heading(title, sid, level=1, spoken=None):
     return Segment(
@@ -466,6 +468,7 @@ def test_front_matter_source_check_is_cached_and_omission_updates_coverage(works
     config, client = Config(), FrontClient()
     omitted = review_front_matter(client, original, book, config, workspace)
     assert omitted == {"one", "two"}
+    config.llm.service_tier = "flex"
     assert review_front_matter(client, original, book, config, workspace) == omitted
     assert client.calls == ["toc:front-matter"]
     result = reconcile_toc(original, book, config, workspace, omitted)
@@ -561,6 +564,7 @@ def test_final_pass_reuses_accepted_drafts_and_navigation_settings_do_not_renarr
     assert result.segments[0].display_title == "1. Signals"
     assert result.segments[0].text == "Chapter one. Signals."
     config.navigation.chapter_prefix = "keep"
+    config.llm.service_tier = "flex"
     result = narrator.narrate(book, chunks)
     assert result.segments[0].display_title == "CHAPTER 1. Signals"
     assert accepted.read_bytes() == original

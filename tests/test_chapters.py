@@ -21,6 +21,8 @@ from technical_audiobook.models import (
 from technical_audiobook.narration import Narrator
 from technical_audiobook.storage import read_json, write_json
 
+pytestmark = pytest.mark.usefixtures("scripted_generation")
+
 
 def chapter_book():
     return Book(
@@ -117,6 +119,9 @@ def test_boundary_candidates_and_cached_decisions(workspace):
     assert client.calls == ["boundary:00003"]
     request = json.dumps(client.messages["boundary:00003"])
     assert "End of chapter one." in request and "Chapter 2. A new topic." in request
+    config.llm.service_tier = "flex"
+    assert planner.plan(book, chunks) == jobs
+    assert client.calls == ["boundary:00003"]
     config.narration.workers = 1
     assert planner.plan(book, chunks) == jobs
     assert client.calls == ["boundary:00003"]

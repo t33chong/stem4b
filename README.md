@@ -4,6 +4,7 @@ Convert a technical PDF or EPUB into a detailed, listener-friendly M4B audiobook
 adapts equations, code, figures, tables and explanatory footnotes for someone who cannot
 see the page, while preserving substantive prose and worked examples. Both the language
 model and speech model use independently configured OpenAI-compatible endpoints.
+Both request paths use the official OpenAI Python SDK.
 
 This Python command-line program works with independently configured model providers.
 FFmpeg handles final audio encoding; local GPU inference is optional.
@@ -356,14 +357,31 @@ speech calls, and a failed source review stops the conversion before TTS.
 
 ## Provider compatibility and audio controls
 
+- Chat Completions and speech use ordinary `OpenAI` client instances with separate
+  base URLs and credentials; there are no application client wrappers or custom HTTP
+  transports. OpenAI-hosted models are not required. Request lifecycle, network retries
+  and backoff are managed by the [official SDK](https://developers.openai.com/api/reference/python).
 - `llm.json_mode = "prompt"` omits `response_format` for servers without JSON mode;
   responses are still schema-validated. JSON mode is the default.
 - Set `llm.token_parameter = "max_completion_tokens"` when required by your model.
   No temperature is sent unless configured. Increase `max_output_tokens` for verbose
   mathematical/code sections or models whose reasoning uses the same token budget.
 - `llm.extra_body` and `tts.extra_body` pass provider-specific fields without overriding
-  the core request. Neither function-calling support nor vendor-specific SDKs are required.
-- `LLM_BASE_URL`, `LLM_MODEL`, `TTS_BASE_URL`, `TTS_MODEL`, and `TTS_VOICE` override TOML.
+  the core request, using the SDK's `extra_body` option. Function calling is not required.
+- Optional `llm.service_tier = "flex"` selects Flex processing on supported models/endpoints;
+  omit it to send no tier parameter. Other provider-supported tier strings pass through.
+  This applies to every LLM call (boundaries, narration, reviews, repairs and front-matter
+  checks), not to `/audio/speech`. It can also be set through `LLM_SERVICE_TIER`.
+  [OpenAI's Flex guide](https://developers.openai.com/api/docs/guides/flex-processing)
+  recommends allowing for slower responses and occasional unavailable capacity. Consider
+  a longer `llm.timeout_seconds`, such as `900`, when configuring a new conversion.
+  Retries keep the requested tier; the program never silently switches to a more expensive
+  tier. `requests.jsonl` records the requested and actual tier when available.
+  Changing only `llm.service_tier` preserves narration, boundary and front-matter caches;
+  the SDK migration also preserves existing speech caches. Other pre-existing LLM settings,
+  including timeout/retry settings, still participate in legacy cache identities.
+  An existing `llm.extra_body.service_tier` is still supported, but do not set both forms.
+- `LLM_BASE_URL`, `LLM_MODEL`, `LLM_SERVICE_TIER`, `TTS_BASE_URL`, `TTS_MODEL`, and `TTS_VOICE` override TOML.
   Shell variables take precedence over `.env`. File references are relative to the TOML.
 - `tts.max_chars` is enforced after pronunciation replacement, splitting at paragraphs,
   sentences or words. Choose a limit your endpoint supports. Speech requests run with
@@ -375,9 +393,20 @@ speech calls, and a failed source review stops the conversion before TTS.
   heading/chapter pauses and table-of-contents depth control final assembly. Optional
   `book.title`, `book.author`, and `book.cover` override source metadata. EPUB covers and
   the first physical PDF page are used automatically, independently of narrated page selection.
-- HTTP timeouts, rate limits and server errors have bounded retries. Authentication and
-  unsupported-parameter failures stop immediately. Invalid audio is kept as `.invalid`
-  for diagnosis; rerunning requests a replacement.
+- `llm.retries` / `tts.retries` configure the SDK's `max_retries`, and each endpoint's
+  `timeout_seconds` configures its SDK timeout. There is no additional application-level
+  network retry loop. Authentication and unsupported-parameter failures stop immediately.
+  Speech downloads are received one bounded clip at a time before being atomically saved,
+  so the SDK can also retry interrupted body reads. Memory use scales with clip size and
+  `tts.workers`, not book length. Partial downloads never replace complete clips.
+  Invalid audio is kept as `.invalid` for diagnosis; rerunning requests a replacement.
+- Provider HTTP failures log the full response body, HTTP status, endpoint path and request
+  ID (when supplied) to stderr, without needing `--verbose`. This is the final response
+  after any SDK retries; connection failures also log their underlying cause. Text/JSON
+  returned by a speech provider in place of audio is included in the error too. Request
+  headers and request payloads are not logged, and successful audio is never dumped to the
+  console. Error bodies are not redacted, so review logs before sharing them if a provider
+  echoes input or credentials. `requests.jsonl` remains a usage log, not an error log.
 
 Clips are concatenated in source order as uniform PCM and encoded to AAC **once**. Chapter
 times are computed from sample counts, including pauses, rather than rounded per-clip

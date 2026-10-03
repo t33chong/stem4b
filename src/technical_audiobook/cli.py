@@ -1,12 +1,13 @@
 import argparse
+import json
 import logging
 from pathlib import Path
 
 from dotenv import load_dotenv
+from openai import APIConnectionError, APIError, APIStatusError
 from pydantic import ValidationError
 
 from . import __version__
-from .api import APIError
 from .config import load_config
 from .covers import repair_cover
 from .pipeline import convert, default_work, synthesize_transcript
@@ -65,8 +66,12 @@ def main(argv: list[str] | None = None) -> int:
         datefmt="%H:%M:%S",
     )
     # Do not expose request headers or embedded book images through HTTP debug logging.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    logging.getLogger("httpcore").setLevel(logging.WARNING)
+    # Verbose output is for this application's diagnostics, not dependency payloads.
+    logging.getLogger().setLevel(logging.WARNING)
+    logging.getLogger("technical_audiobook").setLevel(
+        logging.DEBUG if args.verbose else logging.INFO
+    )
+    logging.getLogger("openai").setLevel(logging.WARNING)
     try:
         if args.env_file and not args.env_file.is_file():
             raise ValueError(f"Environment file not found: {args.env_file}")
@@ -96,7 +101,39 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         logging.error("Interrupted. Completed work is cached; rerun the same command to resume.")
         return 130
-    except (ValueError, OSError, APIError, ValidationError) as exc:
+    except APIStatusError as exc:
+        logging.error(
+            "Provider returned HTTP %s for %s %s (request ID: %s).\nProvider response body:\n%s",
+            exc.status_code,
+            exc.request.method,
+            exc.request.url.path,
+            exc.request_id or "unavailable",
+            exc.response.text or "<empty body>",
+        )
+        return 1
+    except APIConnectionError as exc:
+        logging.error(
+            "Provider connection failed after the configured SDK retries (%s): %s. "
+            "Rerun to resume.",
+            type(exc).__name__,
+            exc,
+        )
+        if exc.__cause__ is not None:
+            logging.error(
+                "Underlying connection error (%s): %s",
+                type(exc.__cause__).__name__,
+                exc.__cause__,
+            )
+        return 1
+    except APIError as exc:
+        logging.error("Provider request failed (%s): %s", type(exc).__name__, exc)
+        if exc.body is not None:
+            body = (
+                exc.body if isinstance(exc.body, str) else json.dumps(exc.body, ensure_ascii=False)
+            )
+            logging.error("Provider response body:\n%s", body)
+        return 1
+    except (ValueError, OSError, ValidationError) as exc:
         logging.error("%s", exc)
         return 1
 

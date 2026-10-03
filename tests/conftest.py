@@ -1,13 +1,92 @@
 import io
+import json
 import math
 import struct
+import threading
 import wave
+from dataclasses import dataclass, field
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import SimpleNamespace
 from zipfile import ZipFile
 
 import pymupdf
 import pytest
 from PIL import Image
+
+
+@dataclass
+class Reply:
+    body: object = b""
+    status: int = 200
+    headers: dict = field(default_factory=dict)
+    truncated: bool = False
+
+
+@pytest.fixture
+def sdk_server():
+    """Exercise the real SDK against a loopback provider, with no external requests."""
+    servers, errors = [], []
+
+    def start(handle):
+        class Handler(BaseHTTPRequestHandler):
+            def do_POST(self):
+                request = SimpleNamespace(
+                    path=self.path,
+                    headers=self.headers,
+                    content=self.rfile.read(int(self.headers.get("content-length", 0))),
+                )
+                try:
+                    reply = handle(request)
+                    is_json = not isinstance(reply.body, bytes)
+                    payload = json.dumps(reply.body).encode() if is_json else reply.body
+                    self.send_response(reply.status)
+                    headers = {
+                        "content-type": "application/json" if is_json else "audio/wav",
+                        "content-length": str(len(payload) + (100 if reply.truncated else 0)),
+                        "connection": "close",
+                        **reply.headers,
+                    }
+                    for name, value in headers.items():
+                        self.send_header(name, value)
+                    self.end_headers()
+                    self.wfile.write(payload)
+                    self.close_connection = True
+                except (BrokenPipeError, ConnectionResetError):
+                    pass  # Expected when a timeout/cancel test closes its connection.
+                except BaseException as exc:
+                    errors.append(exc)
+                    self.close_connection = True
+
+            def log_message(self, *args):
+                pass
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        thread = threading.Thread(
+            target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True
+        )
+        thread.start()
+        servers.append((server, thread))
+        return f"http://127.0.0.1:{server.server_port}/v1"
+
+    yield start
+    for server, thread in servers:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+    if errors:
+        raise errors[0]
+
+
+@pytest.fixture
+def scripted_generation(monkeypatch):
+    """Domain tests script source judgments; SDK request behavior is tested separately."""
+
+    def generate(client, config, work, messages, schema, purpose, validate=None):
+        return client.generate(messages, schema, purpose, validate)
+
+    for module in ("narration", "chapters", "front_matter"):
+        monkeypatch.setattr(f"technical_audiobook.{module}.generate_json", generate)
 
 
 def wave_bytes(rate=22050, duration=0.12):

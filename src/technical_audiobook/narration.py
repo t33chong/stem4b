@@ -6,7 +6,9 @@ from concurrent.futures import CancelledError, ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Event
 
-from .api import LLMClient, TruncatedResponse
+from openai import OpenAI
+
+from .api import TruncatedResponse, generate_json
 from .chapters import ChapterJob, ChapterPlanner
 from .chunking import Chunk
 from .config import Config
@@ -151,7 +153,7 @@ def source_content(chunk: Chunk, work: Path, config: Config, previous: list[Segm
 
 
 class Narrator:
-    def __init__(self, client: LLMClient, config: Config, work: Path):
+    def __init__(self, client: OpenAI, config: Config, work: Path):
         self.client, self.config, self.work = client, config, work
         self.policy = NARRATION_POLICY
         if config.narration.include_exercises:
@@ -175,7 +177,7 @@ class Narrator:
             NARRATION_VERSION,
             self.policy,
             REVIEW_POLICY,
-            self.config.llm.model_dump(),
+            self.config.llm.cache_options(),
             narration_options,
             [u.model_dump() for u in chunk.units],
             context,
@@ -278,7 +280,10 @@ class Narrator:
                 ", ".join(sorted(disputed)),
             )
             write_json(recovery / "draft-0.json", draft)
-            fresh = self.client.generate(
+            fresh = generate_json(
+                self.client,
+                self.config.llm,
+                self.work,
                 [
                     {
                         "role": "system",
@@ -359,7 +364,10 @@ class Narrator:
                                 },
                             ]
                         )
-                    draft = self.client.generate(
+                    draft = generate_json(
+                        self.client,
+                        self.config.llm,
+                        self.work,
                         messages,
                         Draft,
                         f"narrate:{chunk.id}:"
@@ -377,7 +385,10 @@ class Narrator:
                     validate_review(feedback)
                 else:
                     self._check_cancelled(stop)
-                    feedback = self.client.generate(
+                    feedback = generate_json(
+                        self.client,
+                        self.config.llm,
+                        self.work,
                         [
                             {
                                 "role": "system",

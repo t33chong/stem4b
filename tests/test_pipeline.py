@@ -1,11 +1,9 @@
 import json
 import shutil
 
-import httpx
 import pytest
-from conftest import wave_bytes
+from conftest import Reply, wave_bytes
 
-from technical_audiobook.api import LLMClient, SpeechClient
 from technical_audiobook.chapters import BoundaryDecision
 from technical_audiobook.cli import main
 from technical_audiobook.config import Config, LLMConfig, TTSConfig
@@ -16,17 +14,17 @@ from technical_audiobook.pipeline import convert, preflight_output, synthesize_t
 @pytest.mark.parametrize("book_fixture", ["pdf_book", "epub_book"])
 @pytest.mark.parametrize("workers", [1, 2])
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg not installed")
-def test_end_to_end_book_to_m4b(request, book_fixture, workers, workspace, tmp_path, monkeypatch):
+def test_end_to_end_book_to_m4b(request, book_fixture, workers, workspace, tmp_path, sdk_server):
     book = request.getfixturevalue(book_fixture)
     calls = {"chat": 0, "speech": 0}
     speech_inputs = []
 
     def handle(req):
         payload = json.loads(req.content)
-        if req.url.path.endswith("speech"):
+        if req.path.endswith("speech"):
             calls["speech"] += 1
             speech_inputs.append(payload["input"])
-            return httpx.Response(200, content=wave_bytes(), headers={"content-type": "audio/wav"})
+            return Reply(wave_bytes())
         calls["chat"] += 1
         if "You assess a proposed chapter boundary" in payload["messages"][0]["content"]:
             evidence = [
@@ -70,23 +68,15 @@ def test_end_to_end_book_to_m4b(request, book_fixture, workers, workspace, tmp_p
                 ],
             }
             Draft.model_validate(result)
-        return httpx.Response(
-            200,
-            json={
-                "choices": [{"finish_reason": "stop", "message": {"content": json.dumps(result)}}]
-            },
+        return Reply(
+            {"choices": [{"finish_reason": "stop", "message": {"content": json.dumps(result)}}]},
         )
 
-    transport = httpx.MockTransport(handle)
-    monkeypatch.setattr(
-        "technical_audiobook.pipeline.LLMClient",
-        lambda conf, work: LLMClient(conf, work, transport),
+    base_url = sdk_server(handle)
+    config = Config(
+        llm=LLMConfig(model="test-vision", base_url=base_url),
+        tts=TTSConfig(model="test-tts", base_url=base_url),
     )
-    monkeypatch.setattr(
-        "technical_audiobook.pipeline.SpeechClient",
-        lambda conf, work: SpeechClient(conf, work, transport),
-    )
-    config = Config(llm=LLMConfig(model="test-vision"), tts=TTSConfig(model="test-tts"))
     config.narration.workers = workers
     output = tmp_path / f"{book_fixture}.m4b"
     assert convert(book, output, workspace, config) == output
@@ -101,6 +91,7 @@ def test_end_to_end_book_to_m4b(request, book_fixture, workers, workspace, tmp_p
         assert len(chapter_plan["jobs"]) == 2
     before = calls.copy()
     config.narration.workers = 1
+    config.llm.service_tier = "flex"
     convert(book, output, workspace, config)
     assert calls == before
     text_path = workspace / "narration.txt"

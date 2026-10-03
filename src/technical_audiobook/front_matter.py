@@ -5,9 +5,10 @@ import json
 import logging
 from pathlib import Path
 
+from openai import OpenAI
 from pydantic import Field
 
-from .api import LLMClient, TruncatedResponse
+from .api import TruncatedResponse, generate_json
 from .config import Config
 from .models import Book, Model, Transcript
 from .navigation import title_key
@@ -34,7 +35,7 @@ class FrontMatterDecision(Model):
 
 
 def review_front_matter(
-    client: LLMClient, transcript: Transcript, book: Book, config: Config, work: Path
+    client: OpenAI, transcript: Transcript, book: Book, config: Config, work: Path
 ) -> set[str]:
     if (
         not config.navigation.reconcile
@@ -73,7 +74,7 @@ def review_front_matter(
     key = digest(
         [
             POLICY,
-            config.llm.model_dump(),
+            config.llm.cache_options(),
             config.narration.max_images,
             config.narration.max_source_chars,
             [u.model_dump() for u in units],
@@ -123,7 +124,10 @@ def review_front_matter(
                 )
         log.info("Checking %s front-matter source units before TOC reconciliation", len(units))
         try:
-            decision = client.generate(
+            decision = generate_json(
+                client,
+                config.llm,
+                work,
                 [{"role": "system", "content": POLICY}, {"role": "user", "content": content}],
                 FrontMatterDecision,
                 "toc:front-matter",

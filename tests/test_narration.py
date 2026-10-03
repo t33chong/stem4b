@@ -13,6 +13,8 @@ from technical_audiobook.narration import (
 )
 from technical_audiobook.storage import digest, write_json
 
+pytestmark = pytest.mark.usefixtures("scripted_generation")
+
 
 def paragraph(text, source="one", **kwargs):
     return Segment(kind="paragraph", text=text, source_ids=[source], **kwargs)
@@ -183,7 +185,7 @@ def legacy_directory(narrator, chunk, previous):
             NARRATION_VERSION,
             narrator.policy,
             REVIEW_POLICY,
-            narrator.config.llm.model_dump(),
+            narrator.config.llm.model_dump(exclude={"service_tier"}),
             narrator.config.narration.model_dump(exclude={"workers"}),
             [unit.model_dump() for unit in chunk.units],
             [unit.model_dump() if unit else None for unit in (chunk.before, chunk.after)],

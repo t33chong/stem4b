@@ -3,12 +3,12 @@ import json
 import shutil
 from zipfile import ZipFile
 
-import httpx
 import pytest
-from conftest import wave_bytes
+from conftest import Reply, wave_bytes
+from openai import OpenAI
 from PIL import Image
 
-from technical_audiobook.api import SpeechClient
+from technical_audiobook.api import client_options
 from technical_audiobook.audio import package, speech_plan, synthesize
 from technical_audiobook.cli import main
 from technical_audiobook.config import Config, ExtractionConfig, TTSConfig
@@ -146,7 +146,7 @@ def test_cover_only_metadata_refresh_preserves_edited_speech(pdf_book, workspace
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg not installed")
 def test_offline_cover_repair_preserves_audio_chapters_edits_and_resume(
-    pdf_book, workspace, tmp_path, monkeypatch
+    pdf_book, workspace, tmp_path, monkeypatch, sdk_server
 ):
     config = Config(tts=TTSConfig(model="test", workers=1))
     book = extract_book(pdf_book, workspace, ExtractionConfig(start_page=2, end_page=2))
@@ -173,9 +173,10 @@ def test_offline_cover_repair_preserves_audio_chapters_edits_and_resume(
 
     def handle(request):
         calls.append(request)
-        return httpx.Response(200, content=wave_bytes(), headers={"content-type": "audio/wav"})
+        return Reply(wave_bytes())
 
-    client = SpeechClient(config.tts, workspace, httpx.MockTransport(handle))
+    config.tts.base_url = sdk_server(handle)
+    client = OpenAI(**client_options(config.tts))
     plan = speech_plan(transcript, config)
     try:
         synthesize(plan, client, config, workspace)
@@ -207,8 +208,7 @@ def test_offline_cover_repair_preserves_audio_chapters_edits_and_resume(
     def unexpected(*args, **kwargs):
         raise AssertionError("Cover repair must remain offline")
 
-    monkeypatch.setattr("technical_audiobook.pipeline.LLMClient", unexpected)
-    monkeypatch.setattr("technical_audiobook.pipeline.SpeechClient", unexpected)
+    monkeypatch.setattr("technical_audiobook.pipeline.OpenAI", unexpected)
     monkeypatch.chdir(tmp_path)
     assert (
         main(["repair-cover", str(pdf_book), "--work-dir", str(workspace), "-o", str(output)]) == 0

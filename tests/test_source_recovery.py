@@ -8,6 +8,8 @@ from technical_audiobook.models import Coverage, Draft, Finding, Review, Segment
 from technical_audiobook.narration import Narrator, disputed_source_ids, source_content
 from technical_audiobook.storage import read_json, write_json
 
+pytestmark = pytest.mark.usefixtures("scripted_generation")
+
 
 class Responses:
     def __init__(self, *responses):

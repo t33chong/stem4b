@@ -8,9 +8,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
 
+from openai import OpenAI
 from pydantic import Field
 
-from .api import LLMClient, TruncatedResponse
+from .api import TruncatedResponse, generate_json
 from .chunking import Chunk
 from .config import Config
 from .models import Book, Model, SourceUnit
@@ -72,7 +73,7 @@ def chapter_candidates(chunks: list[Chunk], book: Book | None = None) -> list[Ch
 
 
 class ChapterPlanner:
-    def __init__(self, client: LLMClient, config: Config, work: Path):
+    def __init__(self, client: OpenAI, config: Config, work: Path):
         self.client, self.config, self.work = client, config, work
 
     def _evidence(self, chunk: Chunk) -> list[tuple[str, SourceUnit]]:
@@ -90,7 +91,7 @@ class ChapterPlanner:
         key = digest(
             [
                 BOUNDARY_POLICY,
-                self.config.llm.model_dump(),
+                self.config.llm.cache_options(),
                 [self.config.narration.max_images, self.config.narration.max_source_chars],
                 [(role, unit.model_dump()) for role, unit in evidence],
             ]
@@ -159,7 +160,10 @@ class ChapterPlanner:
                 )
         log.info("Checking chapter boundary at %s (%s)", chunk.units[0].id, chunk.units[0].heading)
         try:
-            result = self.client.generate(
+            result = generate_json(
+                self.client,
+                self.config.llm,
+                self.work,
                 [
                     {"role": "system", "content": BOUNDARY_POLICY},
                     {"role": "user", "content": content},

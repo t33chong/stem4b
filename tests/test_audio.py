@@ -1,11 +1,11 @@
 import json
 import shutil
 
-import httpx
 import pytest
-from conftest import wave_bytes
+from conftest import Reply, wave_bytes
+from openai import OpenAI
 
-from technical_audiobook.api import SpeechClient
+from technical_audiobook.api import client_options
 from technical_audiobook.audio import (
     ffmetadata,
     package,
@@ -76,7 +76,9 @@ def test_pronunciations_and_chapter_speech():
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg not installed")
-def test_real_m4b_chapters_cover_duration_resume_and_cache_invalidation(workspace, tmp_path):
+def test_real_m4b_chapters_cover_duration_resume_and_cache_invalidation(
+    workspace, tmp_path, sdk_server
+):
     from PIL import Image
 
     cover = tmp_path / "cover.png"
@@ -90,9 +92,10 @@ def test_real_m4b_chapters_cover_duration_resume_and_cache_invalidation(workspac
 
     def handle(request):
         calls.append(json.loads(request.content))
-        return httpx.Response(200, content=wave_bytes(), headers={"content-type": "audio/wav"})
+        return Reply(wave_bytes())
 
-    client = SpeechClient(config.tts, workspace, httpx.MockTransport(handle))
+    config.tts.base_url = sdk_server(handle)
+    client = OpenAI(**client_options(config.tts))
     book = transcript()
     plan = speech_plan(book, config)
     try:
@@ -142,17 +145,10 @@ def test_real_m4b_chapters_cover_duration_resume_and_cache_invalidation(workspac
 
 
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg not installed")
-def test_invalid_audio_never_becomes_silence(workspace):
+def test_invalid_audio_never_becomes_silence(workspace, sdk_server):
     config = Config(tts=TTSConfig(model="tts", workers=1))
-    client = SpeechClient(
-        config.tts,
-        workspace,
-        httpx.MockTransport(
-            lambda _: httpx.Response(
-                200, content=b"this is not audio", headers={"content-type": "audio/wav"}
-            )
-        ),
-    )
+    config.tts.base_url = sdk_server(lambda _: Reply(b"this is not audio"))
+    client = OpenAI(**client_options(config.tts))
     plan = speech_plan(transcript(), config)
     try:
         with pytest.raises(ValueError, match="Invalid speech audio"):
