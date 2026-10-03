@@ -74,3 +74,48 @@ visual details and unresolved ambiguities as errors. Cosmetic preferences are wa
 Return JSON with approved and findings. Every finding has severity ('error' or 'warning'),
 source_ids and description. Approve only if there are no errors. Do not rewrite the draft.
 """
+
+PAPER_POLICY = """
+Research-paper policy (takes precedence over book-specific conventions above):
+This source is a research paper or technical report, not a textbook. Produce the same
+faithful, detailed adaptation, NOT an abstract-only reading or a summary. Retain the full
+abstract (even if unlabeled), introduction, related-work discussion, methods, experimental
+setup, results, limitations, conclusions, proofs and substantive supplementary material.
+Apply the same math, code, figure, table, footnote, coverage and continuity requirements.
+In multi-column pages, finish each column in reading order; do not interleave neighboring
+columns or confuse a floating figure, author block or running title with body prose.
+
+Opening attribution: when the title/author block is in the PRIMARY source, speak the
+paper's title once, then the FIRST author's name followed by 'et al.' if there are multiple
+named authors. Do NOT read the full coauthor list. For one author, say only that name;
+for a collective/team author, retain the printed team name without inventing a first author
+or adding et al. Mention ALL distinct affiliated institutions shown for the author group,
+not only the first author's affiliation, once each. Never infer an institution from an
+email address, a model name, a team name or outside knowledge. Omit affiliation indices,
+emails, postal addresses, ORCIDs, correspondence markers and equal-contribution footnotes.
+Do not repeat attribution from running headers or CONTEXT ONLY pages, and do not invent
+an introduction if the selected pages start in the middle of the paper. The abbreviated
+author credit and institution list are sufficient coverage of the author block; omitted
+coauthor names are intentional, not a completeness error. Keep this short credit in its
+own paragraph. A title/credit block is NOT disposable book front matter in paper mode.
+
+References: omit the entire reference list/bibliography AND its heading, including lists
+continued onto later pages. Do not narrate citation titles, authors, venues, years, DOIs
+or URLs from that list. Omit bare inline citation markers, but preserve meaningful prose
+attribution, comparisons and related-work explanations. A reference list is NOT the end
+of the paper: resume narration for appendices, proofs, additional experiments, code and
+other substantive material after it, even on the same page. On mixed pages narrate all
+non-bibliographic content and mark the source unit 'narrated'; mark reference-only units
+'omitted' with reason 'Reference list'. Do not omit a whole page or all remaining pages
+because a References heading appears there. Do not turn References into an audio heading.
+
+Use heading_level 1 for top-level paper SECTIONS, 2 for subsections, etc., not textbook
+chapters. Say 'Section one', 'Section two point one', etc. Preserve printed numbers even
+when PDF bookmarks omit them. For lettered appendices use 'Appendix A. Title' as the
+display title and 'Appendix A. Title.' as speech; for A.1 use 'A.1. Title' and 'Section A
+point one. Title.' Do not invent section numbers for genuinely unnumbered headings.
+
+Source review must enforce this policy too: flag long coauthor lists, missing or invented
+affiliations, narrated bibliography entries, a lost abstract or omitted technical appendices
+as errors. Intentional omission of coauthor names and reference entries is not an error.
+"""

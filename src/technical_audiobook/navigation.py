@@ -26,7 +26,13 @@ def validate_source_destinations(book: Book, config: Config, work: Path):
     if not config.navigation.reconcile:
         return
     ids = {u.id for u in book.units}
-    unresolved = [e for e in book.toc.entries if e.selected and e.source_id not in ids]
+    unresolved = [
+        e
+        for e in book.toc.entries
+        if e.selected
+        and e.source_id not in ids
+        and not (config.narration.document_type == "paper" and is_reference_heading(e.title))
+    ]
     if unresolved:
         target = work / "toc-report.json"
         write_json(
@@ -49,7 +55,11 @@ def validate_source_destinations(book: Book, config: Config, work: Path):
 
 def number_words(number: str) -> str:
     if "." in number:
-        return " point ".join(number_words(part) for part in number.split("."))
+        parts = number.split(".")
+        # Lettered appendix subsections are not Roman chapter numbers (I.2, X.1).
+        if len(parts[0]) == 1 and parts[0].isalpha():
+            return parts[0].upper() + " point " + " point ".join(number_words(p) for p in parts[1:])
+        return " point ".join(number_words(part) for part in parts)
     if not number.isdigit():
         # Roman chapter/part labels, but a single appendix letter is handled by the caller.
         values = {"I": 1, "V": 5, "X": 10, "L": 50, "C": 100, "D": 500, "M": 1000}
@@ -87,7 +97,7 @@ def number_words(number: str) -> str:
 
 def split_title(title: str) -> tuple[str, str, str]:
     match = re.match(
-        r"^(?:(chapter|section|part|appendix)\s+)?((?>\d+(?:\.\d+)*)|[IVXLCDM]+|[A-Z])(?:\s*[.:,)\-–—]\s*|\s+)(.+)$",
+        r"^(?:(chapter|section|part|appendix)\s+)?((?>\d+(?:\.\d+)*)|[A-Z](?:\.\d+)+|[IVXLCDM]+|[A-Z])(?:\s*[.:,)\-–—]\s*|\s+)(.+)$",
         title.strip(),
         re.IGNORECASE,
     )
@@ -113,6 +123,15 @@ def title_key(title: str) -> str:
     value = unicodedata.normalize("NFKC", split_title(title)[2]).casefold()
     value = value.replace("&", "and")
     return "".join(character for character in value if character.isalnum())
+
+
+def is_reference_heading(title: str) -> bool:
+    return split_title(title)[2].casefold().rstrip(".:").strip() in {
+        "references",
+        "bibliography",
+        "works cited",
+        "literature cited",
+    }
 
 
 def _matching_headings(title: str, headings: dict[int, Segment]) -> list[int]:
@@ -160,7 +179,7 @@ def _pdf_heading_evidence(text: str, title: str) -> list[str]:
     matches = []
     for start in range(len(lines)):
         if start and re.fullmatch(
-            r"(?:(?:chapter|section|part|appendix)\s+)?(?:\d+(?:\.\d+)*|[IVXLCDM]+|[A-Z])[.:)]?",
+            r"(?:(?:chapter|section|part|appendix)\s+)?(?:\d+(?:\.\d+)*|[A-Z](?:\.\d+)+|[IVXLCDM]+|[A-Z])[.:)]?",
             lines[start - 1],
             re.IGNORECASE,
         ):
@@ -298,7 +317,13 @@ def standard_heading(
         spoken_prefix = (
             prefix.capitalize()
             if prefix
-            else ("Chapter" if entry.level == 1 and "." not in number else "Section")
+            else (
+                "Chapter"
+                if config.narration.document_type == "book"
+                and entry.level == 1
+                and "." not in number
+                else "Section"
+            )
         )
         spoken_number = (
             number if prefix.lower() == "appendix" and number.isalpha() else number_words(number)
@@ -313,6 +338,29 @@ def standard_heading(
         heading_level=entry.level,
         source_ids=original.source_ids if original else [entry.source_id],
     )
+
+
+def _paper_appendix_labels(entries: list[TocEntry], headings: dict[int, Segment]):
+    """Interpret a bare appendix letter only when accepted source review corroborates it.
+
+    In particular, never strip the article from an ordinary title like 'A New Method'.
+    Source entries and accepted checkpoints are not modified by this final-pass repair.
+    """
+    for entry in entries:
+        match = re.fullmatch(r"([A-Z])[.]?\s+(.+)", entry.title)
+        if not match:
+            continue
+        letter, body = match.groups()
+        for heading in headings.values():
+            prefix, number, heading_body = split_title(heading.display_title)
+            if (
+                entry.source_id in heading.source_ids
+                and prefix.lower() == "appendix"
+                and number == letter
+                and title_key(body) == title_key(heading_body)
+            ):
+                entry.title = f"Appendix {letter}. {body}"
+                break
 
 
 def reconcile_toc(
@@ -397,7 +445,16 @@ def reconcile_toc(
     headings = {i: s for i, s in enumerate(result.segments) if s.kind == "heading"}
     source_entries = [entry for entry in book.toc.entries if entry.selected]
     entries = [entry.model_copy() for entry in source_entries]
+    omitted_reference_indices = set()
+    if config.narration.document_type == "paper":
+        _paper_appendix_labels(entries, headings)
+        omitted_reference_indices = {
+            i for i, entry in enumerate(entries) if is_reference_heading(entry.title)
+        }
     resolutions = _adjacent_pdf_destinations(entries, book, headings, covered)
+    resolutions = {
+        i: value for i, value in resolutions.items() if i not in omitted_reference_indices
+    }
     for index, resolution in resolutions.items():
         if "resolved_source_id" in resolution:
             entries[index].source_id = resolution["resolved_source_id"]
@@ -407,7 +464,9 @@ def reconcile_toc(
         destinations = [positions[e.source_id] for e in entries if e.source_id in positions]
         if destinations != sorted(destinations):
             report["errors"].append("Adjacent-page corrections conflict with source TOC order")
-    counts = Counter(entry.source_id for entry in entries)
+    counts = Counter(
+        entry.source_id for i, entry in enumerate(entries) if i not in omitted_reference_indices
+    )
     replacements, insertions = {}, {}
     matched_order = []
     for entry_index, entry in enumerate(entries):
@@ -415,6 +474,12 @@ def reconcile_toc(
         resolution = resolutions.get(entry_index, {})
         record.update(resolution)
         report["entries"].append(record)
+        if entry_index in omitted_reference_indices:
+            # PDF source IDs identify pages, not sections: a reference list may share
+            # a narrated page with conclusions or a subsequent technical appendix.
+            # Exclude only its navigation entry, never the page or its remaining text.
+            record.update(action="omitted_reference_list", reason="Research-paper narration policy")
+            continue
         if "error" in resolution:
             report["errors"].append(resolution["error"])
             continue

@@ -97,6 +97,7 @@ def convert(
                 {
                     "title": book.title,
                     "author": book.author,
+                    "document_type": config.narration.document_type,
                     "source_units": len(book.units),
                     "initial_chunks": len(chunks),
                     "source_characters": sum(len(u.text) for u in book.units),

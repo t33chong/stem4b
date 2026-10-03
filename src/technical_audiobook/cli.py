@@ -16,7 +16,7 @@ from .pipeline import convert, default_work, synthesize_transcript
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(
         prog="audiobook",
-        description="Create a listener-friendly technical audiobook from PDF or EPUB.",
+        description="Create a listener-friendly audiobook from a technical book or research paper.",
     )
     result.add_argument("--version", action="version", version=__version__)
     commands = result.add_subparsers(dest="command", required=True)
@@ -24,6 +24,11 @@ def parser() -> argparse.ArgumentParser:
         "convert", help="Extract, narrate, synthesize, and package a book"
     )
     conversion.add_argument("source", type=Path)
+    conversion.add_argument(
+        "--document-type",
+        choices=["book", "paper"],
+        help="Narration policy (overrides narration.document_type; default: book)",
+    )
     conversion.add_argument(
         "--work-dir", type=Path, help="Persistent cache directory (default: OUTPUT.work)"
     )
@@ -82,6 +87,8 @@ def main(argv: list[str] | None = None) -> int:
         )
         config = load_config(config_path)
         if args.command == "convert":
+            if args.document_type is not None:
+                config.narration.document_type = args.document_type
             result = convert(
                 args.source,
                 args.output,

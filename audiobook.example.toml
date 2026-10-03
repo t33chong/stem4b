@@ -36,6 +36,9 @@ image_max_dimension = 2000
 include_nonlinear_epub = false
 
 [narration]
+# Use "paper" for research papers/technical reports: short author credit + institutions,
+# no reference lists, full technical content and appendices. CLI: --document-type paper.
+document_type = "book"
 # Set to 2 or more to narrate source-verified independent chapters concurrently.
 # Sections within a chapter remain sequential. Worker count does not invalidate caches.
 # Also bounds concurrent source-only chapter-boundary checks.

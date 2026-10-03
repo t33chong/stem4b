@@ -1,7 +1,7 @@
 # Technical Audiobook Generator
 
-Convert a technical PDF or EPUB into a detailed, listener-friendly M4B audiobook. It
-adapts equations, code, figures, tables and explanatory footnotes for someone who cannot
+Convert a technical book or research paper in PDF or EPUB into a detailed, listener-friendly
+M4B audiobook. It adapts equations, code, figures, tables and explanatory footnotes for someone who cannot
 see the page, while preserving substantive prose and worked examples. Both the language
 model and speech model use independently configured OpenAI-compatible endpoints.
 Both request paths use the official OpenAI Python SDK.
@@ -44,6 +44,52 @@ PDF, `extraction.start_page` / `end_page` select **one-based physical pages**, i
 Omit them for the whole book. Different models still need different context/output limits
 and narration tuning; automated review is helpful but cannot guarantee mathematical or
 visual correctness.
+
+## Research papers and technical reports
+
+Use the same conversion pipeline with an explicit paper policy:
+
+```sh
+.venv/bin/audiobook convert papers/2505.24832v3.pdf -c audiobook.toml \
+  --document-type paper -o papers/2505.24832v3.m4b --until narrate
+# Review papers/2505.24832v3.work/narration.txt, then generate the audio:
+.venv/bin/audiobook synthesize papers/2505.24832v3.work/narration.txt \
+  -c audiobook.toml -o papers/2505.24832v3.m4b
+```
+
+Omit `--until narrate` to produce the M4B in one command. Alternatively, set
+`document_type = "paper"` in the `[narration]` section of your TOML; the CLI flag overrides
+that setting. The default remains `book`, without guessing from filenames or directories.
+
+Paper mode instructs both narration and source review to:
+
+- Read the title, first author's name plus “et al.” for multiple named authors, and all
+  distinct affiliated institutions shown in the source. A single author or collective/team
+  author keeps their printed name; missing affiliations are not guessed. Omit the coauthor
+  roll call, email addresses, affiliation markers and contribution footnotes.
+- Keep the full abstract and substantive paper, including related work, methods, results,
+  limitations, proofs and technical appendices. Figures, code, equations, tables and useful
+  footnotes receive the same detailed treatment as in books; this is not a paper summary.
+- Omit reference lists and their headings, but retain meaningful comparisons/attributions
+  in the prose. References do not mark the end of the document: technical material after
+  them stays, including on pages shared with bibliography entries.
+- Use “Section one” rather than “Chapter one” for numbered top-level sections, and preserve
+  appendix labels such as “Appendix A” and “Section A point one”.
+
+All pages and page images still reach the model; no heuristic cuts off the document at a
+References heading. Coverage records account for reference-only pages as intentional
+omissions. The final TOC pass excludes reference-list entries even on partially narrated
+pages, and paper title/credit blocks are not discarded as book front matter. Existing
+column-layout, source-review, revision and resume safeguards still apply. Keep
+`narration.review = true` (the default), and inspect the narration before synthesis;
+author/affiliation selection and bibliography omission rely on the model's source reading.
+
+Existing book caches stay compatible. Changing between book and paper policies requires
+new narration/review, so choose the mode before starting and use it on every `convert`
+resume. `synthesize` uses the already edited text and does not need the flag. If the PDF
+lacks title/author metadata, `[book].title` and `[book].author` still override the M4B tags;
+those metadata fields are not themselves spoken. Remove any book-specific page range from
+your configuration when converting an entire paper.
 
 ## How it works
 

@@ -15,8 +15,13 @@ from .config import Config
 from .front_matter import review_front_matter
 from .models import Book, Draft, Review, Segment, Transcript
 from .narration_text import load_script, render_text, save_narration
-from .navigation import reconcile_toc, validate_published_navigation, validate_source_destinations
-from .prompts import NARRATION_POLICY, REVIEW_POLICY
+from .navigation import (
+    is_reference_heading,
+    reconcile_toc,
+    validate_published_navigation,
+    validate_source_destinations,
+)
+from .prompts import NARRATION_POLICY, PAPER_POLICY, REVIEW_POLICY
 from .storage import asset_path, atomic_text, digest, read_json, write_json
 
 log = logging.getLogger(__name__)
@@ -54,7 +59,7 @@ def disputed_source_ids(review: Review) -> set[str]:
     }
 
 
-def check_coverage(draft: Draft, chunk: Chunk):
+def check_coverage(draft: Draft, chunk: Chunk, *, document_type: str = "book"):
     primary = {unit.id for unit in chunk.units}
     covered = [item.source_id for item in draft.coverage]
     if len(covered) != len(set(covered)) or set(covered) != primary:
@@ -71,6 +76,15 @@ def check_coverage(draft: Draft, chunk: Chunk):
         elif item.source_id not in cited:
             raise ValueError(f"{item.source_id} claims narration but no segment cites it")
     for index, segment in enumerate(draft.segments):
+        if (
+            document_type == "paper"
+            and segment.kind == "heading"
+            and is_reference_heading(segment.display_title)
+        ):
+            raise ValueError(
+                "Paper narration must omit reference-list headings and entries, while retaining "
+                "all substantive content on the same page and in subsequent appendices."
+            )
         if segment.continues_previous and index != 0:
             raise ValueError("Only the FIRST segment may continue the previous batch")
 
@@ -156,6 +170,8 @@ class Narrator:
     def __init__(self, client: OpenAI, config: Config, work: Path):
         self.client, self.config, self.work = client, config, work
         self.policy = NARRATION_POLICY
+        if config.narration.document_type == "paper":
+            self.policy += PAPER_POLICY
         if config.narration.include_exercises:
             self.policy += (
                 "\nExercise policy: Include and narrate exercises and their instructions.\n"
@@ -171,7 +187,7 @@ class Narrator:
             ).read_text(encoding="utf-8")
 
     def _cache_directory(self, chunk: Chunk, previous: list[Segment]) -> Path:
-        narration_options = self.config.narration.model_dump(exclude={"max_revisions", "workers"})
+        narration_options = self.config.narration.cache_options()
         context = [u.model_dump() if u else None for u in [chunk.before, chunk.after]]
         inputs = [
             NARRATION_VERSION,
@@ -217,7 +233,7 @@ class Narrator:
         if not final.is_file():
             return None
         draft = Draft.model_validate(read_json(final))
-        check_coverage(draft, chunk)
+        check_coverage(draft, chunk, document_type=self.config.narration.document_type)
         append_segments(previous, draft.segments)
         return draft
 
@@ -321,13 +337,13 @@ class Narrator:
         final = directory / "accepted.json"
         if final.exists():
             draft = Draft.model_validate(read_json(final))
-            check_coverage(draft, chunk)
+            check_coverage(draft, chunk, document_type=self.config.narration.document_type)
             append_segments(previous, draft.segments)
             log.info("Reusing narration %s", chunk.id)
             return draft
 
         def validate(draft: Draft):
-            check_coverage(draft, chunk)
+            check_coverage(draft, chunk, document_type=self.config.narration.document_type)
             append_segments(previous, draft.segments)
 
         def validate_review(review: Review):

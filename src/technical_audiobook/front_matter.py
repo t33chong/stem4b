@@ -38,7 +38,8 @@ def review_front_matter(
     client: OpenAI, transcript: Transcript, book: Book, config: Config, work: Path
 ) -> set[str]:
     if (
-        not config.navigation.reconcile
+        config.narration.document_type == "paper"
+        or not config.navigation.reconcile
         or not config.navigation.omit_front_matter
         or not book.toc.entries
     ):

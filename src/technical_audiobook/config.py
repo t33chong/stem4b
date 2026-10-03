@@ -110,6 +110,7 @@ class ExtractionConfig(Model):
 
 
 class NarrationConfig(Model):
+    document_type: Literal["book", "paper"] = "book"
     workers: int = Field(default=1, ge=1, le=32)
     max_pdf_pages: int = Field(default=3, ge=1, le=20)
     max_source_chars: int = Field(default=18000, ge=1000)
@@ -119,6 +120,13 @@ class NarrationConfig(Model):
     max_revisions: int = Field(default=2, ge=0, le=50)
     include_exercises: bool = False
     instructions_file: str | None = None
+
+    def cache_options(self) -> dict:
+        excluded = {"max_revisions", "workers"}
+        if self.document_type == "book":
+            # Keep existing book checkpoint identities byte-for-byte compatible.
+            excluded.add("document_type")
+        return self.model_dump(exclude=excluded)
 
 
 class NavigationConfig(Model):

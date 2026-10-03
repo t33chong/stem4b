@@ -13,8 +13,11 @@ from technical_audiobook.pipeline import convert, preflight_output, synthesize_t
 
 @pytest.mark.parametrize("book_fixture", ["pdf_book", "epub_book"])
 @pytest.mark.parametrize("workers", [1, 2])
+@pytest.mark.parametrize("document_type", ["book", "paper"])
 @pytest.mark.skipif(not shutil.which("ffmpeg"), reason="FFmpeg not installed")
-def test_end_to_end_book_to_m4b(request, book_fixture, workers, workspace, tmp_path, sdk_server):
+def test_end_to_end_book_to_m4b(
+    request, book_fixture, workers, document_type, workspace, tmp_path, sdk_server
+):
     book = request.getfixturevalue(book_fixture)
     calls = {"chat": 0, "speech": 0}
     speech_inputs = []
@@ -78,6 +81,7 @@ def test_end_to_end_book_to_m4b(request, book_fixture, workers, workspace, tmp_p
         tts=TTSConfig(model="test-tts", base_url=base_url),
     )
     config.narration.workers = workers
+    config.narration.document_type = document_type
     output = tmp_path / f"{book_fixture}.m4b"
     assert convert(book, output, workspace, config) == output
     assert output.stat().st_size > 0
