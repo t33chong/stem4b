@@ -115,6 +115,118 @@ def title_key(title: str) -> str:
     return "".join(character for character in value if character.isalnum())
 
 
+def _matching_headings(title: str, headings: dict[int, Segment]) -> list[int]:
+    candidates = [i for i, s in headings.items() if title_key(s.display_title) == title_key(title)]
+    if not candidates:
+        candidates = [
+            i
+            for i, s in headings.items()
+            if SequenceMatcher(None, title_key(s.display_title), title_key(title)).ratio() >= 0.9
+        ]
+    if len(candidates) > 1:
+        number = split_title(title)[1]
+        numbered = [
+            i for i in candidates if number and split_title(headings[i].display_title)[1] == number
+        ]
+        if len(numbered) == 1:
+            candidates = numbered
+    return candidates
+
+
+def _same_heading(left: str, right: str) -> bool:
+    # Nearby-page recovery is stricter than ordinary same-destination matching.
+    # Numberless bookmarks may match numbered headings, but explicit numbers
+    # in either the source or narration must not contradict one another.
+    left_number, right_number = split_title(left)[1], split_title(right)[1]
+    return (
+        bool(title_key(left))
+        and title_key(left) == title_key(right)
+        and (
+            not left_number or not right_number or left_number.casefold() == right_number.casefold()
+        )
+    )
+
+
+def _pdf_heading_evidence(text: str, title: str) -> list[str]:
+    """Find whole heading lines (up to three wrapped lines), never prose substrings.
+
+    Do not use SourceUnit.heading: it comes from the very bookmarks being checked.
+    Overlapping matches such as a separate number line plus a title line are one
+    occurrence; two separate occurrences remain ambiguous.
+    """
+    lines = [
+        line.strip() for line in unicodedata.normalize("NFKC", text).splitlines() if line.strip()
+    ]
+    matches = []
+    for start in range(len(lines)):
+        if start and re.fullmatch(
+            r"(?:(?:chapter|section|part|appendix)\s+)?(?:\d+(?:\.\d+)*|[IVXLCDM]+|[A-Z])[.:)]?",
+            lines[start - 1],
+            re.IGNORECASE,
+        ):
+            # Do not discard a separate printed number to make a conflicting
+            # numbered heading appear to be an unnumbered exact title match.
+            continue
+        for end in range(start + 1, min(start + 3, len(lines)) + 1):
+            label = " ".join(lines[start:end])
+            if _same_heading(label, title):
+                matches.append((start, end, label))
+    return [
+        label
+        for start, end, label in matches
+        if not any(a <= start and b >= end and (a, b) != (start, end) for a, b, _ in matches)
+    ]
+
+
+def _adjacent_pdf_destinations(
+    entries: list[TocEntry], book: Book, headings: dict[int, Segment], covered: set[str]
+) -> dict[int, dict]:
+    """Resolve only corroborated, one-physical-page bookmark errors for this final pass."""
+    if book.format != "pdf" or book.toc.kind != "pdf_outline":
+        return {}
+    units = {unit.id: unit for unit in book.units}
+    resolutions = {}
+    for entry_index, entry in enumerate(entries):
+        unit = units.get(entry.source_id)
+        if unit is None or not re.fullmatch(r"p\d{5,}", unit.id):
+            continue
+        local = {i: s for i, s in headings.items() if unit.id in s.source_ids}
+        if _matching_headings(entry.title, local) or _pdf_heading_evidence(unit.text, entry.title):
+            continue  # A local match or real source heading takes precedence.
+        page = int(unit.id[1:])
+        adjacent = {f"p{p:05d}" for p in (page - 1, page + 1) if p > 0}
+        candidates = []
+        for index, heading in headings.items():
+            if len(heading.source_ids) != 1 or not _same_heading(
+                entry.title, heading.display_title
+            ):
+                continue
+            sid = heading.source_ids[0]
+            if sid not in adjacent or sid not in covered or sid not in units:
+                continue
+            for evidence in _pdf_heading_evidence(units[sid].text, heading.display_title):
+                if _same_heading(entry.title, evidence):
+                    candidates.append(
+                        {
+                            "segment": index,
+                            "resolved_source_id": sid,
+                            "source_heading_evidence": evidence,
+                            "narration_heading": heading.display_title,
+                        }
+                    )
+        if len(candidates) == 1:
+            resolutions[entry_index] = {
+                "matching": "source_verified_adjacent_pdf_page",
+                **candidates[0],
+            }
+        elif candidates:
+            resolutions[entry_index] = {
+                "error": f"{entry.title}: ambiguous source-verified adjacent-page headings at {entry.source_id}",
+                "adjacent_candidates": candidates,
+            }
+    return resolutions
+
+
 def sentence(text: str) -> str:
     text = text.strip().rstrip(".").rstrip()
     return text if text.endswith(("!", "?")) else text + "."
@@ -250,13 +362,29 @@ def reconcile_toc(
         item.source_id: item.reason for item in result.coverage if item.disposition == "omitted"
     }
     headings = {i: s for i, s in enumerate(result.segments) if s.kind == "heading"}
-    entries = [entry for entry in book.toc.entries if entry.selected]
+    source_entries = [entry for entry in book.toc.entries if entry.selected]
+    entries = [entry.model_copy() for entry in source_entries]
+    resolutions = _adjacent_pdf_destinations(entries, book, headings, covered)
+    for index, resolution in resolutions.items():
+        if "resolved_source_id" in resolution:
+            entries[index].source_id = resolution["resolved_source_id"]
+    # Corrections change final navigation scopes only. Source units, bookmarks,
+    # chapter jobs and accepted narration/cache identities remain untouched.
+    if resolutions:
+        destinations = [positions[e.source_id] for e in entries if e.source_id in positions]
+        if destinations != sorted(destinations):
+            report["errors"].append("Adjacent-page corrections conflict with source TOC order")
     counts = Counter(entry.source_id for entry in entries)
     replacements, insertions = {}, {}
     matched_order = []
     for entry_index, entry in enumerate(entries):
-        record = {**entry.model_dump(), "action": "unresolved"}
+        record = {**source_entries[entry_index].model_dump(), "action": "unresolved"}
+        resolution = resolutions.get(entry_index, {})
+        record.update(resolution)
         report["entries"].append(record)
+        if "error" in resolution:
+            report["errors"].append(resolution["error"])
+            continue
         if entry.source_id not in positions:
             report["errors"].append(
                 f"{entry.title}: {entry.reason or 'unresolved source destination'}"
@@ -274,7 +402,9 @@ def reconcile_toc(
             (
                 positions[e.source_id]
                 for e in entries[entry_index + 1 :]
-                if e.source_id and e.level <= entry.level and positions[e.source_id] > start
+                if e.source_id in positions
+                and e.level <= entry.level
+                and positions[e.source_id] > start
             ),
             len(book.units),
         )
@@ -295,27 +425,7 @@ def reconcile_toc(
             for i, s in headings.items()
             if entry.source_id in s.source_ids and i not in replacements
         ]
-        candidates = [
-            i for i in local if title_key(headings[i].display_title) == title_key(entry.title)
-        ]
-        if not candidates:
-            candidates = [
-                i
-                for i in local
-                if SequenceMatcher(
-                    None, title_key(headings[i].display_title), title_key(entry.title)
-                ).ratio()
-                >= 0.9
-            ]
-        if len(candidates) > 1:
-            number = split_title(entry.title)[1]
-            numbered = [
-                i
-                for i in candidates
-                if number and split_title(headings[i].display_title)[1] == number
-            ]
-            if len(numbered) == 1:
-                candidates = numbered
+        candidates = _matching_headings(entry.title, {i: headings[i] for i in local})
         if not candidates and len(local) == 1 and counts[entry.source_id] == 1:
             candidates = local
             record["matching"] = "unique_source_destination"

@@ -233,6 +233,15 @@ checkpoints or ask the LLM to rewrite chapters.
   entries. Missing headings are restored only at unambiguous source starts. Unresolved
   destinations, ambiguous placements or inconsistent ordering stop conversion with a
   `toc-report.json` diagnostic; no final narration is overwritten by that reconciliation.
+- If a PDF bookmark is one physical page early or late, reconciliation can match an
+  existing accepted heading on the immediately adjacent page. This requires an exact
+  title match in both the narration and actual extracted heading lines (up to three
+  wrapped lines), with compatible numbers. Bookmark-derived heading hints and prose
+  mentions do not count as evidence. Ambiguous matches, missing evidence and conflicting
+  TOC order still stop the final pass. The report preserves the original destination
+  alongside `resolved_source_id` and `source_heading_evidence`. These corrections affect
+  only final navigation: source units, chapter partitions and accepted narration remain
+  unchanged, and no new model calls are needed for this fallback.
 - Without a machine-readable TOC, generated headings remain in place with standardized
   numbering and an explicit warning. This version does not infer a TOC from printed
   contents-page images. Set `navigation.reconcile = false` to disable the pass.
