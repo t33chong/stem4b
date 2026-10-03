@@ -223,6 +223,14 @@ checkpoints or ask the LLM to rewrite chapters.
   the number: `2.10.1. Earth Ground`. Spoken headings consistently use number words:
   `Section two point ten point one. Earth Ground.` Previously reviewed verbalizations
   of the title itself are retained when they correspond to the source title.
+- Unnumbered TOC labels do not erase chapter/section numbers already present in a
+  matching accepted heading. An exact normalized title match is required to retain
+  those numbers; they are never inferred from the entry's position in the TOC.
+  Conflicting explicit TOC/narration numbers, or an unsafe number transfer between
+  different titles, stop the pass with a diagnostic. `toc-report.json` records each
+  matched heading's resolved number and whether it came from the TOC or accepted
+  narration. Rerunning `convert --until narrate` repairs older unedited exports from
+  the accepted cache without re-narrating the book.
 - By default, PDF chapter labels omit the `CHAPTER` prefix (`2. Theory`); EPUB labels
   retain that prefix when supplied by the source (`CHAPTER 2. Theory`). Both are spoken
   as `Chapter two. Theory.` Set `navigation.chapter_prefix` to `keep` or `omit` to override.

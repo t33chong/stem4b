@@ -96,6 +96,8 @@ def test_recovers_both_directions_with_source_evidence_without_moving_content(
     assert result.segments[0] == original.segments[0]  # Figure stays BEFORE the heading.
     assert result.segments[2] == original.segments[2]
     assert result.segments[1].source_ids == [f"p{actual_page:05d}"]
+    assert result.segments[1].display_title == "2.2.2. Hierarchical Structures"
+    assert result.segments[1].text == "Section two point two point two. Hierarchical Structures."
     report = read_json(workspace / "toc-report.json")
     assert not report["errors"]
     record = report["entries"][0]
@@ -186,8 +188,8 @@ def test_parent_and_child_bookmarks_on_same_page_are_resolved_independently(work
     original.coverage[1].disposition, original.coverage[1].reason = "narrated", ""
     result = reconcile_toc(original, book, Config(), workspace)
     assert [(s.display_title, s.source_ids) for s in result.segments if s.kind == "heading"] == [
-        ("Lists", ["p00002"]),
-        (TITLE, ["p00003"]),
+        ("2.2. Lists", ["p00002"]),
+        ("2.2.2. Hierarchical Structures", ["p00003"]),
     ]
     records = read_json(workspace / "toc-report.json")["entries"]
     assert "resolved_source_id" not in records[0]
@@ -270,4 +272,7 @@ def test_final_pass_exports_from_accepted_cache_without_requests_or_checkpoint_e
     assert narrator.narrate(book, chunks) == result
     assert checkpoint.read_bytes() == saved
     assert book.toc.entries[0].source_id == "p00002"
-    assert load_script(workspace / "narration.txt").segments[1].display_title == TITLE
+    assert (
+        load_script(workspace / "narration.txt").segments[1].display_title
+        == "2.2.2. Hierarchical Structures"
+    )

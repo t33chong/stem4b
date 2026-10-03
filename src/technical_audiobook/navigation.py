@@ -232,10 +232,43 @@ def sentence(text: str) -> str:
     return text if text.endswith(("!", "?")) else text + "."
 
 
+def _heading_label(entry: TocEntry, original: Segment | None) -> tuple[str, str, str]:
+    """An unnumbered bookmark is not evidence that the printed heading lacks a number.
+
+    Retain accepted display numbering only for an exact normalized title match.
+    Destination-only or fuzzy matches may locate a heading, but cannot safely
+    transfer its number to a different title. Never infer numbers from TOC order.
+    """
+    prefix, number, body = split_title(entry.title)
+    if original:
+        old_prefix, old_number, _ = split_title(original.display_title)
+        if old_number and number:
+            # Roman and Arabic chapter labels can denote the same number;
+            # appendix letters, however, must remain letters (including I/V/X).
+            def key(label_prefix, label_number):
+                if label_prefix.lower() == "appendix" and label_number.isalpha():
+                    return "letter", label_number.upper()
+                return "number", number_words(label_number)
+
+            if key(prefix, number) != key(old_prefix, old_number):
+                raise ValueError(
+                    f"{entry.title}: conflicting heading numbers in source TOC ({number}) "
+                    f"and accepted narration ({old_number})"
+                )
+        elif old_number:
+            if title_key(original.display_title) != title_key(entry.title):
+                raise ValueError(
+                    f"{entry.title}: cannot safely retain numbering from accepted heading "
+                    f"{original.display_title!r}; titles do not match exactly"
+                )
+            prefix, number = old_prefix, old_number
+    return prefix, number, body
+
+
 def standard_heading(
     entry: TocEntry, book: Book, config: Config, original: Segment | None = None
 ) -> Segment:
-    prefix, number, body = split_title(entry.title)
+    prefix, number, body = _heading_label(entry, original)
     display = entry.title
     spoken_body = body.replace("(", ", ").replace(")", "").strip(" ,")
     if original:
@@ -431,9 +464,24 @@ def reconcile_toc(
             record["matching"] = "unique_source_destination"
         if len(candidates) == 1:
             index = candidates[0]
-            replacements[index] = standard_heading(entry, book, config, headings[index])
+            record["narration_heading"] = headings[index].display_title
+            try:
+                replacements[index] = standard_heading(entry, book, config, headings[index])
+            except ValueError as exc:
+                record["error"] = str(exc)
+                report["errors"].append(str(exc))
+                continue
+            number = split_title(replacements[index].display_title)[1]
             record.update(
-                action="matched", segment=index, display_title=replacements[index].display_title
+                action="matched",
+                segment=index,
+                display_title=replacements[index].display_title,
+                numbering={
+                    "number": number,
+                    "source": "source_toc"
+                    if split_title(entry.title)[1]
+                    else ("accepted_heading" if number else "unnumbered"),
+                },
             )
             matched_order.append(index)
             continue

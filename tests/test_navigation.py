@@ -127,6 +127,176 @@ def test_chapter_number_style(format, display):
     assert standard_heading(book.toc.entries[0], book, config).display_title == "2. Theory"
 
 
+@pytest.mark.parametrize("format", ["pdf", "epub"])
+@pytest.mark.parametrize(
+    "accepted,level,spoken,display,expected",
+    [
+        ("1. Signals", 1, "Chapter 1. Signals.", "1. Signals", "Chapter one. Signals."),
+        ("1.1 Signals", 2, "Signals", "1.1. Signals", "Section one point one. Signals."),
+        (
+            "1.1.1. Signals",
+            3,
+            "Section 1.1.1, Signals.",
+            "1.1.1. Signals",
+            "Section one point one point one. Signals.",
+        ),
+        (
+            "4.4.4.1. Signals",
+            4,
+            "Section four point four point four point one, Signals.",
+            "4.4.4.1. Signals",
+            "Section four point four point four point one. Signals.",
+        ),
+        (
+            "2.21 Signals",
+            2,
+            "Two point twenty one. Signals..",
+            "2.21. Signals",
+            "Section two point twenty-one. Signals.",
+        ),
+        ("Part IV: Signals", 1, "Part four. Signals.", "Part IV. Signals", "Part four. Signals."),
+        (
+            "Appendix I: Signals",
+            1,
+            "Appendix I. Signals.",
+            "Appendix I. Signals",
+            "Appendix I. Signals.",
+        ),
+    ],
+)
+def test_unnumbered_toc_preserves_accepted_numbers_and_is_idempotent(
+    workspace, format, accepted, level, spoken, display, expected
+):
+    book = source_book([("Signals", "one", level)], format)
+    # Bookmarks often lack numbers; PDF text can also have undecodable font glyphs.
+    book.units[0].text = "\ue119\nSignals" if level == 1 else accepted
+    config = Config()
+    config.audio.toc_depth = 6
+    original = transcript(book, [heading(accepted, "one", level, spoken)])
+    before = original.model_dump(), book.model_dump()
+    result = reconcile_toc(original, book, config, workspace)
+    assert result.segments[0].display_title == display
+    assert result.segments[0].text == expected
+    assert reconcile_toc(result, book, config, workspace) == result
+    assert (original.model_dump(), book.model_dump()) == before
+    record = read_json(workspace / "toc-report.json")["entries"][0]
+    assert record["numbering"]["source"] == "accepted_heading"
+    assert record["numbering"]["number"]
+    save_narration(result, workspace)
+    script = load_script(workspace / "narration.txt")
+    assert script.segments[0].text == expected
+    assert speech_plan(script, config)[0].title == display
+
+
+@pytest.mark.parametrize(
+    "format,policy,display",
+    [
+        ("pdf", "auto", "2. Theory"),
+        ("pdf", "keep", "CHAPTER 2. Theory"),
+        ("epub", "auto", "CHAPTER 2. Theory"),
+        ("epub", "omit", "2. Theory"),
+    ],
+)
+def test_retained_number_obeys_chapter_prefix_policy(format, policy, display):
+    book = source_book([("Theory", "one", 1)], format)
+    config = Config()
+    config.navigation.chapter_prefix = policy
+    result = standard_heading(
+        book.toc.entries[0],
+        book,
+        config,
+        heading("CHAPTER 2: Theory", "one", spoken="Chapter two. Theory."),
+    )
+    assert result.display_title == display
+    assert result.text == "Chapter two. Theory."
+
+
+def test_front_matter_does_not_shift_or_acquire_chapter_numbers(workspace):
+    book = source_book([("Foreword", "one", 1), ("Signals", "two", 1)])
+    original = transcript(book, [heading("Foreword", "one"), heading("1. Signals", "two")])
+    result = reconcile_toc(original, book, Config(), workspace)
+    assert [(s.display_title, s.text) for s in result.segments] == [
+        ("Foreword", "Foreword."),
+        ("1. Signals", "Chapter one. Signals."),
+    ]
+    records = read_json(workspace / "toc-report.json")["entries"]
+    assert records[0]["numbering"] == {"number": "", "source": "unnumbered"}
+    assert records[1]["numbering"] == {"number": "1", "source": "accepted_heading"}
+
+
+@pytest.mark.parametrize(
+    "title,problem",
+    [
+        ("3. Signals", "conflicting heading numbers"),
+        ("A Different Topic", "cannot safely retain numbering"),
+        ("Signal", "cannot safely retain numbering"),  # Fuzzy matches cannot transfer numbers.
+    ],
+)
+def test_conflicting_or_unsafe_numbering_stops_without_overwriting(workspace, title, problem):
+    book = source_book([(title, "one", 1)])
+    original = transcript(book, [heading("2. Signals", "one")])
+    save_narration(original, workspace)
+    paths = [workspace / "narration.txt", workspace / "narration.json"]
+    saved = [p.read_bytes() for p in paths]
+    with pytest.raises(ValueError, match=problem):
+        reconcile_toc(original, book, Config(), workspace)
+    assert [p.read_bytes() for p in paths] == saved
+    report = read_json(workspace / "toc-report.json")
+    assert report["status"] == "needs_attention"
+    assert problem in report["entries"][0]["error"]
+
+
+def test_equivalent_explicit_roman_and_arabic_numbers_use_toc_style(workspace):
+    book = source_book([("Chapter IV: Signals", "one", 1)])
+    original = transcript(book, [heading("4. Signals", "one")])
+    result = reconcile_toc(original, book, Config(), workspace)
+    assert result.segments[0].display_title == "IV. Signals"
+    assert result.segments[0].text == "Chapter four. Signals."
+    assert read_json(workspace / "toc-report.json")["entries"][0]["numbering"] == {
+        "number": "IV",
+        "source": "source_toc",
+    }
+
+
+@pytest.mark.parametrize("edited", [False, True])
+def test_repair_numberless_export_reuses_cache_and_protects_edits(workspace, edited):
+    class NoRequests:
+        def generate(self, *args, **kwargs):
+            raise AssertionError("Numbering repair must not make model calls")
+
+    book = source_book([("Signals", "one", 1)])
+    config = Config()
+    narrator = Narrator(NoRequests(), config, workspace)
+    chunks = plan_chunks(book, config.narration)
+    checkpoint = narrator._cache_directory(chunks[0], []) / "accepted.json"
+    original = transcript(
+        book, [heading("1. Signals", "one"), paragraph("Complete accepted explanation.", "one")]
+    )
+    write_json(checkpoint, Draft(segments=original.segments, coverage=original.coverage))
+    accepted = checkpoint.read_bytes()
+    # Simulate a baseline exported by the old pass that stripped the number.
+    old_export = original.model_copy(deep=True)
+    old_export.segments[0] = heading("Signals", "one", spoken="Signals.")
+    save_narration(old_export, workspace)
+    path = workspace / "narration.txt"
+    if edited:
+        path.write_text(path.read_text().replace("Complete accepted", "Manually edited"))
+        saved_text = path.read_bytes()
+        saved_json = (workspace / "narration.json").read_bytes()
+        with pytest.raises(ValueError, match="contains edits"):
+            narrator.narrate(book, chunks)
+        assert path.read_bytes() == saved_text
+        assert (workspace / "narration.json").read_bytes() == saved_json
+    else:
+        repaired = narrator.narrate(book, chunks)
+        assert repaired.segments[0].display_title == "1. Signals"
+        assert repaired.segments[0].text == "Chapter one. Signals."
+        assert repaired.segments[1:] == original.segments[1:]
+        assert load_script(path).segments[0].text == "Chapter one. Signals."
+        assert narrator.narrate(book, chunks) == repaired
+    assert checkpoint.read_bytes() == accepted
+
+
 def test_pdf_multiple_headings_on_same_page_preserve_order_and_fix_depth(workspace):
     book = source_book([("CHAPTER 2 Theory", "one", 1), ("2.3 Voltage", "two", 2)])
     book.toc.entries.insert(
