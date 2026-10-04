@@ -120,8 +120,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except APIConnectionError as exc:
         logging.error(
-            "Provider connection failed after the configured SDK retries (%s): %s. "
-            "Rerun to resume.",
+            "Provider connection failed after the configured retries (%s): %s. Rerun to resume.",
             type(exc).__name__,
             exc,
         )

@@ -405,8 +405,9 @@ speech calls, and a failed source review stops the conversion before TTS.
 
 - Chat Completions and speech use ordinary `OpenAI` client instances with separate
   base URLs and credentials; there are no application client wrappers or custom HTTP
-  transports. OpenAI-hosted models are not required. Request lifecycle, network retries
-  and backoff are managed by the [official SDK](https://developers.openai.com/api/reference/python).
+  transports. OpenAI-hosted models are not required. The
+  [official SDK](https://developers.openai.com/api/reference/python) handles requests and
+  ordinary retries; Flex uses the explicit retry/fallback policy described below.
 - `llm.json_mode = "prompt"` omits `response_format` for servers without JSON mode;
   responses are still schema-validated. JSON mode is the default.
 - Set `llm.token_parameter = "max_completion_tokens"` when required by your model.
@@ -421,9 +422,10 @@ speech calls, and a failed source review stops the conversion before TTS.
   [OpenAI's Flex guide](https://developers.openai.com/api/docs/guides/flex-processing)
   recommends allowing for slower responses and occasional unavailable capacity. Consider
   a longer `llm.timeout_seconds`, such as `900`, when configuring a new conversion.
-  Retries keep the requested tier; the program never silently switches to a more expensive
-  tier. `requests.jsonl` records the requested and actual tier when available.
-  Changing only `llm.service_tier` preserves narration, boundary and front-matter caches;
+  By default retries keep the requested tier; standard fallback requires explicit opt-in.
+  `requests.jsonl` records the tier actually requested and the returned tier when available;
+  after a fallback it also records `configured_service_tier = "flex"`.
+  Changing only `llm.service_tier` or the Flex controls below preserves narration, boundary and front-matter caches;
   the SDK migration also preserves existing speech caches. Other pre-existing LLM settings,
   including timeout/retry settings, still participate in legacy cache identities.
   An existing `llm.extra_body.service_tier` is still supported, but do not set both forms.
@@ -439,20 +441,68 @@ speech calls, and a failed source review stops the conversion before TTS.
   heading/chapter pauses and table-of-contents depth control final assembly. Optional
   `book.title`, `book.author`, and `book.cover` override source metadata. EPUB covers and
   the first physical PDF page are used automatically, independently of narrated page selection.
-- `llm.retries` / `tts.retries` configure the SDK's `max_retries`, and each endpoint's
-  `timeout_seconds` configures its SDK timeout. There is no additional application-level
-  network retry loop. Authentication and unsupported-parameter failures stop immediately.
+- `llm.retries` / `tts.retries` configure the SDK's `max_retries` for ordinary requests
+  (including standard fallback), and each endpoint's `timeout_seconds` configures its SDK
+  timeout per attempt. Flex overrides SDK retries with its own bounded policy; the two
+  loops are never nested. Authentication and unsupported-parameter failures stop immediately.
   Speech downloads are received one bounded clip at a time before being atomically saved,
   so the SDK can also retry interrupted body reads. Memory use scales with clip size and
   `tts.workers`, not book length. Partial downloads never replace complete clips.
   Invalid audio is kept as `.invalid` for diagnosis; rerunning requests a replacement.
 - Provider HTTP failures log the full response body, HTTP status, endpoint path and request
   ID (when supplied) to stderr, without needing `--verbose`. This is the final response
-  after any SDK retries; connection failures also log their underlying cause. Text/JSON
+  after configured retries; connection failures also log their underlying cause. Text/JSON
   returned by a speech provider in place of audio is included in the error too. Request
   headers and request payloads are not logged, and successful audio is never dumped to the
   console. Error bodies are not redacted, so review logs before sharing them if a provider
   echoes input or credentials. `requests.jsonl` remains a usage log, not an error log.
+
+### Flex retries and optional standard fallback
+
+These settings apply only when the effective `service_tier` is `"flex"`, whether configured
+in `[llm]`, `LLM_SERVICE_TIER`, or the legacy `llm.extra_body.service_tier` field:
+
+```toml
+[llm]
+service_tier = "flex"
+flex_max_attempts = 6              # Total attempts, INCLUDING the initial request
+flex_initial_backoff_seconds = 5
+flex_max_backoff_seconds = 60
+flex_fallback_to_standard = false  # Default: NEVER switch tiers
+flex_fallback_service_tier = "auto"
+```
+
+Flex retries HTTP **429 and 503**, covering OpenAI resource-unavailable responses and
+the 503 capacity responses from Gemini's OpenAI-compatible endpoint. Backoff approximately
+doubles after each failure, capped at `flex_max_backoff_seconds`, with 0–25% downward jitter
+to avoid synchronizing workers. Valid `Retry-After` (seconds or HTTP date) and
+`retry-after-ms` hints are minimum delays. A hint above the configured maximum stops the
+request without retrying early or switching tiers; increase the maximum or resume later.
+
+Set `flex_fallback_to_standard = true` to opt into potentially higher costs. For example,
+with `flex_max_attempts = 3`, three unsuccessful Flex attempts ending in HTTP 429/503 are
+followed by a request using `flex_fallback_service_tier`. `"auto"` uses the provider/project's
+normal routing, as recommended by the
+[OpenAI Flex guide](https://developers.openai.com/api/docs/guides/flex-processing), and is
+not a guarantee of a particular project tier. Use `"default"` to explicitly request
+[OpenAI's standard pricing and performance](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create).
+Choose the value supported by your compatible endpoint. No provider, model, credentials,
+prompt or generation settings change. The fallback uses the ordinary `llm.retries` budget;
+it does not switch back to Flex or create another fallback loop.
+
+Timeouts, connection failures and other transient HTTP errors (408, 409, 5xx) also retry
+within the Flex budget, but do not trigger fallback unless the final failure is 429/503.
+Authentication, bad-parameter errors, recognized quota/billing errors, explicit provider
+`x-should-retry: false`, and cancellation do not trigger retries or tier fallback.
+Invalid JSON, refusals, source-review rejections and truncation are content problems, not
+capacity failures; they never directly trigger tier fallback.
+
+The budget is per LLM call, including boundaries, reviews and repairs. Each new call starts
+on Flex again, including JSON-repair calls; a successful fallback never changes the shared
+configuration or another worker's tier. Retry warnings show the purpose, attempt count,
+delay and provider error body, and fallback warnings make the pricing change explicit.
+The default maximum is six Flex attempts; `llm.retries` does not multiply that count.
+TTS requests are unaffected.
 
 Clips are concatenated in source order as uniform PCM and encoded to AAC **once**. Chapter
 times are computed from sample counts, including pauses, rather than rounded per-clip

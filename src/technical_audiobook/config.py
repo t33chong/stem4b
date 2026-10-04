@@ -41,6 +41,11 @@ class Endpoint(Model):
 class LLMConfig(Endpoint):
     api_key_env: str = "LLM_API_KEY"
     service_tier: str | None = Field(default=None, min_length=1)
+    flex_max_attempts: int = Field(default=6, ge=1, le=1000)
+    flex_initial_backoff_seconds: float = Field(default=5, gt=0, allow_inf_nan=False)
+    flex_max_backoff_seconds: float = Field(default=60, gt=0, allow_inf_nan=False)
+    flex_fallback_to_standard: bool = False
+    flex_fallback_service_tier: Literal["auto", "default"] = "auto"
     max_output_tokens: int = Field(default=16000, ge=256)
     token_parameter: Literal["max_tokens", "max_completion_tokens"] = "max_tokens"
     json_mode: Literal["json_object", "prompt"] = "json_object"
@@ -49,7 +54,16 @@ class LLMConfig(Endpoint):
     def cache_options(self) -> dict:
         # Processing tier affects scheduling/pricing, not accepted narration content.
         # Omitting it also preserves the exact keys of pre-SDK checkpoints.
-        return self.model_dump(exclude={"service_tier"})
+        return self.model_dump(
+            exclude={
+                "service_tier",
+                "flex_max_attempts",
+                "flex_initial_backoff_seconds",
+                "flex_max_backoff_seconds",
+                "flex_fallback_to_standard",
+                "flex_fallback_service_tier",
+            }
+        )
 
     @model_validator(mode="after")
     def reserved_options(self):
@@ -67,6 +81,10 @@ class LLMConfig(Endpoint):
             raise ValueError("llm.extra_body cannot override core request fields")
         if self.service_tier is not None and "service_tier" in self.extra_body:
             raise ValueError("Set service_tier in llm or llm.extra_body, not both")
+        if self.flex_max_backoff_seconds < self.flex_initial_backoff_seconds:
+            raise ValueError(
+                "flex_max_backoff_seconds must be at least flex_initial_backoff_seconds"
+            )
         return self
 
 

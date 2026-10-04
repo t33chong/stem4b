@@ -185,7 +185,7 @@ def legacy_directory(narrator, chunk, previous):
             NARRATION_VERSION,
             narrator.policy,
             REVIEW_POLICY,
-            narrator.config.llm.model_dump(exclude={"service_tier"}),
+            narrator.config.llm.cache_options(),
             narrator.config.narration.model_dump(exclude={"workers", "document_type"}),
             [unit.model_dump() for unit in chunk.units],
             [unit.model_dump() if unit else None for unit in (chunk.before, chunk.after)],

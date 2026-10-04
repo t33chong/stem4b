@@ -77,7 +77,8 @@ def test_independent_credentials_base_urls_and_optional_fields(monkeypatch, work
     assert "secret" not in (workspace / "requests.jsonl").read_text()
 
 
-def test_schema_repair_and_sdk_retry(workspace, sdk_server):
+def test_schema_repair_and_flex_retry(workspace, sdk_server, monkeypatch):
+    monkeypatch.setattr("technical_audiobook.api.sleep", lambda _: None)
     replies = iter(
         [
             Reply({"error": "busy"}, 429, {"retry-after-ms": "1"}),
@@ -239,7 +240,7 @@ def test_sdk_never_inherits_global_credentials_or_custom_headers(
 
 @pytest.mark.parametrize("status", [408, 409, 429, 500, 503])
 @pytest.mark.parametrize("kind", ["chat", "speech"])
-def test_sdk_owns_bounded_retries_without_tier_fallback(workspace, sdk_server, status, kind):
+def test_sdk_owns_non_flex_and_speech_retries(workspace, sdk_server, status, kind):
     calls = []
 
     def handle(request):
@@ -249,7 +250,7 @@ def test_sdk_owns_bounded_retries_without_tier_fallback(workspace, sdk_server, s
     config_type = LLMConfig if kind == "chat" else TTSConfig
     config = config_type(model="test", retries=2, timeout_seconds=900, base_url=sdk_server(handle))
     if kind == "chat":
-        config.service_tier = "flex"
+        config.service_tier = "default"
     with OpenAI(**client_options(config)) as client, pytest.raises(APIStatusError) as caught:
         assert client.max_retries == 2 and client.timeout == 900
         if kind == "chat":
@@ -260,7 +261,7 @@ def test_sdk_owns_bounded_retries_without_tier_fallback(workspace, sdk_server, s
     assert [call.headers.get("x-stainless-retry-count") for call in calls] == ["0", "1", "2"]
     for call in calls:
         body = json.loads(call.content)
-        assert body.get("service_tier") == ("flex" if kind == "chat" else None)
+        assert body.get("service_tier") == ("default" if kind == "chat" else None)
     assert not (workspace / "requests.jsonl").exists()
 
 
@@ -430,7 +431,7 @@ def test_cli_logs_connection_error_details(monkeypatch, workspace, caplog, timeo
 
     monkeypatch.setattr("technical_audiobook.cli.convert", fail)
     assert main(["convert", "unused.pdf", "-o", str(workspace / "unused.m4b")]) == 1
-    assert "configured SDK retries" in caplog.text
+    assert "configured retries" in caplog.text
     assert ("APITimeoutError" if timeout else "APIConnectionError") in caplog.text
     assert ("provider read timed out" if timeout else "DNS lookup failed") in caplog.text
     assert "Provider response body" not in caplog.text
