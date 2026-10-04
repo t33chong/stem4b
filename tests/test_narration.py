@@ -11,6 +11,7 @@ from stem4b.narration import (
     append_segments,
     check_coverage,
 )
+from stem4b.prompts import NARRATION_POLICY, PARAGRAPH_ONLY_NARRATION_POLICY
 from stem4b.storage import digest, write_json
 
 pytestmark = pytest.mark.usefixtures("scripted_generation")
@@ -34,6 +35,91 @@ def test_join_midword_and_move_figure_after_complete_paragraph():
     assert previous[0].text.endswith("-")  # No mutation of a cached draft.
     with pytest.raises(ValueError, match="no preceding"):
         append_segments([], [paragraph("the rest.", continues_previous=True)])
+
+
+def test_code_continuation_joins_code_not_prose_and_preserves_evidence():
+    previous = [
+        paragraph("The implementation follows."),
+        Segment(kind="code", text="The root can contain any", source_ids=["one"]),
+        Segment(kind="figure", text="A tree diagram.", source_ids=["one"]),
+    ]
+    incoming = [
+        Segment(
+            kind="code",
+            text="value. Set both bounds.",
+            source_ids=["one", "two"],
+            continues_previous=True,
+        )
+    ]
+    joined = append_segments(previous, incoming)
+    assert [s.kind for s in joined] == ["paragraph", "code", "figure"]
+    assert joined[0].text == "The implementation follows."
+    assert joined[1].text == "The root can contain any value. Set both bounds."
+    assert joined[1].source_ids == ["one", "two"]
+    assert not joined[1].continues_previous
+    assert previous[1].text == "The root can contain any"
+    assert incoming[0].continues_previous
+
+
+@pytest.mark.parametrize("prior", ["none", "paragraph", "heading"])
+def test_code_continuation_requires_code_in_the_same_section(prior):
+    previous = []
+    if prior == "paragraph":
+        previous = [paragraph("Unrelated prose.")]
+    elif prior == "heading":
+        previous = [
+            Segment(kind="code", text="Old listing.", source_ids=["one"]),
+            Segment(
+                kind="heading",
+                text="New section.",
+                display_title="New section",
+                heading_level=2,
+                source_ids=["one"],
+            ),
+        ]
+    with pytest.raises(ValueError, match="no preceding code segment"):
+        append_segments(
+            previous,
+            [
+                Segment(
+                    kind="code",
+                    text="the rest.",
+                    source_ids=["two"],
+                    continues_previous=True,
+                )
+            ],
+        )
+
+
+def test_code_continuation_does_not_strip_a_minus_operator():
+    previous = [Segment(kind="code", text="Return n -", source_ids=["one"])]
+    incoming = [Segment(kind="code", text="one.", source_ids=["two"], continues_previous=True)]
+    assert append_segments(previous, incoming)[0].text == "Return n - one."
+
+
+@pytest.mark.parametrize("kind", ["heading", "figure", "table", "equation", "footnote"])
+def test_other_segment_kinds_cannot_continue(kind):
+    heading = {"display_title": "A heading", "heading_level": 1} if kind == "heading" else {}
+    with pytest.raises(ValueError, match="Only paragraphs and code"):
+        Segment(kind=kind, text="Text.", source_ids=["one"], continues_previous=True, **heading)
+
+
+def test_only_first_segment_may_continue_code():
+    chunk = Chunk("one", [SourceUnit(id="one", location="page 1", text="content")])
+    draft = Draft(
+        segments=[
+            paragraph("Some prose."),
+            Segment(
+                kind="code",
+                text="Continued code.",
+                source_ids=["one"],
+                continues_previous=True,
+            ),
+        ],
+        coverage=[Coverage(source_id="one", disposition="narrated")],
+    )
+    with pytest.raises(ValueError, match="Only the FIRST"):
+        check_coverage(draft, chunk)
 
 
 def test_exact_source_coverage():
@@ -132,18 +218,26 @@ def test_rejected_review_does_not_write_final_transcript(workspace):
     assert not (workspace / "narration.json").exists()
 
 
-def test_truncation_subdivides_and_preserves_boundary_continuity(workspace):
+@pytest.mark.parametrize("kind", ["paragraph", "code"])
+def test_truncation_subdivides_and_preserves_boundary_continuity(workspace, kind):
     units = [
         SourceUnit(id="one", location="page 1", text="The mean is"),
         SourceUnit(id="two", location="page 2", text="the sum divided by the count."),
     ]
     book = Book(title="Test", source_sha256="abc", format="pdf", units=units)
     first = Draft(
-        segments=[paragraph("The mean is")],
+        segments=[Segment(kind=kind, text="The mean is", source_ids=["one"])],
         coverage=[Coverage(source_id="one", disposition="narrated")],
     )
     second = Draft(
-        segments=[paragraph("the sum divided by the count.", "two", continues_previous=True)],
+        segments=[
+            Segment(
+                kind=kind,
+                text="the sum divided by the count.",
+                source_ids=["two"],
+                continues_previous=True,
+            )
+        ],
         coverage=[Coverage(source_id="two", disposition="narrated")],
     )
     config = Config(narration=NarrationConfig(review=False))
@@ -152,10 +246,12 @@ def test_truncation_subdivides_and_preserves_boundary_continuity(workspace):
     assert len(result.segments) == 1
     assert result.segments[0].text == "The mean is the sum divided by the count."
     assert result.segments[0].source_ids == ["one", "two"]
+    assert result.segments[0].kind == kind
     assert len(client.calls) == 3
 
 
-def test_split_with_omitted_left_half_continues_earlier_batch(workspace):
+@pytest.mark.parametrize("kind", ["paragraph", "code"])
+def test_split_with_omitted_left_half_continues_earlier_batch(workspace, kind):
     chunk = Chunk(
         "two",
         [
@@ -168,14 +264,123 @@ def test_split_with_omitted_left_half_continues_earlier_batch(workspace):
         coverage=[Coverage(source_id="one", disposition="omitted", reason="Running header")],
     )
     continued = Draft(
-        segments=[paragraph("the remainder.", "two", continues_previous=True)],
+        segments=[
+            Segment(kind=kind, text="the remainder.", source_ids=["two"], continues_previous=True)
+        ],
         coverage=[Coverage(source_id="two", disposition="narrated")],
     )
     client = ScriptedLLM([TruncatedResponse("too long"), omitted, continued])
     config = Config(narration=NarrationConfig(review=False))
-    previous = [paragraph("This is", "previous")]
+    previous = [Segment(kind=kind, text="This is", source_ids=["previous"])]
     draft = Narrator(client, config, workspace).chunk(chunk, previous)
     assert append_segments(previous, draft.segments)[0].text == "This is the remainder."
+
+
+@pytest.mark.parametrize("left_kind", ["figure", "paragraph"])
+def test_split_continues_external_code_past_non_code_left_half(workspace, left_kind):
+    chunk = Chunk(
+        "two",
+        [
+            SourceUnit(id="one", location="page 1", text="Intervening material."),
+            SourceUnit(id="two", location="page 2", text="the remainder."),
+        ],
+    )
+    left = Draft(
+        segments=[Segment(kind=left_kind, text="Intervening material.", source_ids=["one"])],
+        coverage=[Coverage(source_id="one", disposition="narrated")],
+    )
+    right = Draft(
+        segments=[
+            Segment(kind="code", text="the remainder.", source_ids=["two"], continues_previous=True)
+        ],
+        coverage=[Coverage(source_id="two", disposition="narrated")],
+    )
+    client = ScriptedLLM([TruncatedResponse("too long"), left, right])
+    previous = [Segment(kind="code", text="This is", source_ids=["previous"])]
+    config = Config(narration=NarrationConfig(review=False))
+    draft = Narrator(client, config, workspace).chunk(chunk, previous)
+    assert draft.segments[0].kind == "code"
+    assert draft.segments[0].continues_previous
+    combined = append_segments(previous, draft.segments)
+    assert combined[0].text == "This is the remainder."
+    assert combined[1].text == "Intervening material."
+
+
+@pytest.mark.parametrize("kind", ["paragraph", "code"])
+def test_split_preserves_external_continuation_when_both_halves_continue(workspace, kind):
+    chunk = Chunk(
+        "two",
+        [
+            SourceUnit(id="one", location="page 1", text="the"),
+            SourceUnit(id="two", location="page 2", text="value."),
+        ],
+    )
+    drafts = [
+        Draft(
+            segments=[Segment(kind=kind, text=text, source_ids=[sid], continues_previous=True)],
+            coverage=[Coverage(source_id=sid, disposition="narrated")],
+        )
+        for sid, text in (("one", "the"), ("two", "value."))
+    ]
+    client = ScriptedLLM([TruncatedResponse("too long"), *drafts])
+    previous = [Segment(kind=kind, text="Return", source_ids=["previous"])]
+    config = Config(narration=NarrationConfig(review=False))
+    draft = Narrator(client, config, workspace).chunk(chunk, previous)
+    assert draft.segments[0].text == "the value."
+    assert draft.segments[0].source_ids == ["one", "two"]
+    assert draft.segments[0].continues_previous
+    joined = append_segments(previous, draft.segments)
+    assert joined[0].text == "Return the value."
+    assert joined[0].source_ids == ["previous", "one", "two"]
+    assert not joined[0].continues_previous
+    assert previous[0].text == "Return"
+
+
+@pytest.mark.parametrize("document_type", ["book", "paper"])
+def test_resume_paragraph_only_policy_cache_and_review_edited_code(workspace, document_type):
+    config = Config(narration=NarrationConfig(max_pdf_pages=1, document_type=document_type))
+    book = Book(
+        title="Code",
+        source_sha256="abc",
+        format="pdf",
+        units=[
+            SourceUnit(id="one", location="page 1", text="The root can contain any"),
+            SourceUnit(id="two", location="page 2", text="value."),
+        ],
+    )
+    chunks = plan_chunks(book, config.narration)
+    old = Narrator(ScriptedLLM([]), config, workspace)
+    old.policy = PARAGRAPH_ONLY_NARRATION_POLICY + old.policy[len(NARRATION_POLICY) :]
+    first = Draft(
+        segments=[Segment(kind="code", text="The root can contain any", source_ids=["one"])],
+        coverage=[Coverage(source_id="one", disposition="narrated")],
+    )
+    edited = Draft(
+        segments=[Segment(kind="code", text="value.", source_ids=["two"], continues_previous=True)],
+        coverage=[Coverage(source_id="two", disposition="narrated")],
+    )
+    accepted = old._cache_directory(chunks[0], []) / "accepted.json"
+    draft_file = old._cache_directory(chunks[1], first.segments) / "draft-0.json"
+    write_json(accepted, first)
+    write_json(draft_file, edited)
+    original_files = {p: p.read_bytes() for p in (accepted, draft_file)}
+
+    class CodeReviewLLM(ScriptedLLM):
+        def generate(self, messages, schema, purpose, validate=None):
+            assert "Keep code explanations as kind=code" in messages[0]["content"]
+            return super().generate(messages, schema, purpose, validate)
+
+    client = CodeReviewLLM([Review(approved=True)])
+    narrator = Narrator(client, config, workspace)
+    assert narrator._cache_directory(chunks[0], []) == accepted.parent
+    assert narrator._cache_directory(chunks[1], first.segments) == draft_file.parent
+    transcript = narrator.narrate(book, chunks)
+    assert client.calls == ["review:00002:0"]
+    assert transcript.segments[0].text == "The root can contain any value."
+    assert transcript.segments[0].source_ids == ["one", "two"]
+    assert not transcript.segments[0].continues_previous
+    assert all(path.read_bytes() == content for path, content in original_files.items())
+    assert Narrator(ScriptedLLM([]), config, workspace).narrate(book, chunks) == transcript
 
 
 def legacy_directory(narrator, chunk, previous):
@@ -284,7 +489,10 @@ def test_legacy_accepted_checkpoint_takes_priority_over_new_unfinished_attempt(w
 
 
 @pytest.mark.parametrize("changed", ["source", "model", "policy", "previous"])
-def test_legacy_cache_still_checks_source_settings_and_context(workspace, changed):
+@pytest.mark.parametrize("paragraph_only_policy", [False, True])
+def test_legacy_cache_still_checks_source_settings_and_context(
+    workspace, changed, paragraph_only_policy
+):
     config = Config(llm=LLMConfig(model="original"))
     chunk = Chunk("00001", [SourceUnit(id="one", location="page 1", text="Definition.")])
     old = Draft(
@@ -292,6 +500,8 @@ def test_legacy_cache_still_checks_source_settings_and_context(workspace, change
         coverage=[Coverage(source_id="one", disposition="narrated")],
     )
     narrator = Narrator(ScriptedLLM([]), config, workspace)
+    if paragraph_only_policy:
+        narrator.policy = PARAGRAPH_ONLY_NARRATION_POLICY + narrator.policy[len(NARRATION_POLICY) :]
     previous = [paragraph("Previous section.", "previous")]
     write_json(legacy_directory(narrator, chunk, previous) / "accepted.json", old)
     if changed == "source":

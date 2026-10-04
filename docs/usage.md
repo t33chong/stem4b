@@ -260,7 +260,11 @@ may be narrated. It must account for every source unit, including explicit reaso
 omissions. The review pass compares the actual draft to the same source evidence and
 requests bounded revisions. Truncated output triggers smaller batches; a single unit
 that still exceeds limits stops with guidance. Oversized input units are never silently
-truncated. Cross-batch paragraph continuations are joined before speech synthesis.
+truncated. Cross-batch paragraph and code-explanation continuations are joined before
+speech synthesis. A draft's first segment can use `continues_previous = true` for
+either kind; it joins the preceding segment of the same kind without crossing a
+heading. Source IDs are combined, and intervening figures remain after the completed
+explanation. This flag belongs to the draft JSON, not the editable final text format.
 
 The built-in narration policy includes:
 

@@ -77,7 +77,7 @@ def render_text(transcript: Transcript) -> str:
     parts = [f"Title: {_escape(transcript.title)}\nAuthor: {_escape(transcript.author)}\n{FORMAT}"]
     for segment in transcript.segments:
         if segment.continues_previous:
-            raise ValueError("Cannot export an unresolved paragraph continuation")
+            raise ValueError("Cannot export an unresolved narration continuation")
         if segment.kind == "heading":
             parts.append(
                 f"{'#' * segment.heading_level} {_escape(segment.display_title)}\n"

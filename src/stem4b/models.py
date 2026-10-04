@@ -67,8 +67,10 @@ class Segment(Model):
             raise ValueError("Headings need an original display_title and a heading_level of 1–6")
         if self.kind != "heading" and (self.display_title or self.heading_level):
             raise ValueError("Only headings may have display_title or heading_level")
-        if self.continues_previous and self.kind != "paragraph":
-            raise ValueError("Only paragraphs may continue a preceding paragraph")
+        if self.continues_previous and self.kind not in {"paragraph", "code"}:
+            raise ValueError(
+                "Only paragraphs and code may continue a preceding segment of the same kind"
+            )
         return self
 
 

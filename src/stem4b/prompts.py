@@ -1,6 +1,22 @@
 """Source-grounded narration and review policies."""
 
-NARRATION_POLICY = """You prepare a detailed technical book for a listener who cannot see it.
+CONTINUITY_POLICY = """Continuity and ownership: narrate ALL primary source units, each exactly once. Adjacent
+context units are ONLY context; do not narrate or cite their source IDs. Do not borrow
+future words to complete a sentence or code explanation: retain its unfinished ending
+so the next batch can continue it. Rejoin paragraphs and code explanations across pages
+within the current batch. If the first paragraph or code segment continues the previous
+batch's last segment of that SAME kind, return only the new spoken words and set
+continues_previous=true. Keep code explanations as kind=code, including when a listing
+or its explanation spans pages; do not restart the listing or repeat its earlier steps.
+That continuation must be the FIRST segment, before top-of-page figures. Never cross a
+heading to continue an earlier segment, and never merge code into an unrelated prose
+paragraph. Never repeat the supplied previous narration. Do not set continues_previous
+on any other segment or on a new, independent listing. If a prose word is hyphenated
+across the boundary, preserve its two parts and terminal hyphen for deterministic joining.
+"""
+
+NARRATION_POLICY = (
+    """You prepare a detailed technical book for a listener who cannot see it.
 Produce a faithful, fully narrated adaptation, not a summary. Preserve substantive prose,
 definitions, worked examples, caveats, derivations and the author's logical progression.
 Only adapt wording as needed for clear spoken delivery. Do not invent facts or repair
@@ -44,16 +60,9 @@ sidebars and worked examples. Omit running headers/footers/page numbers, bibliog
 bare citations, indexes, publisher/legal boilerplate, printed contents lists and blank pages.
 The separate exercise policy below controls homework; worked examples are always included.
 
-Continuity and ownership: narrate ALL primary source units, each exactly once. Adjacent
-context units are ONLY context; do not narrate or cite their source IDs. Do not borrow
-future words to complete the last sentence: retain an unfinished final paragraph so that
-the next batch can continue it. Rejoin paragraphs across pages within the current batch.
-If the first paragraph continues the previous batch's last prose paragraph, return only
-the new words in that paragraph and set continues_previous=true. That continuation must
-be the FIRST segment, before top-of-page figures. Never repeat the supplied previous
-narration. Do not set continues_previous on any other segment. If a word is hyphenated
-across the boundary, preserve its two parts and terminal hyphen for deterministic joining.
-
+"""
+    + CONTINUITY_POLICY
+    + """
 Return one JSON object matching the supplied schema. Every segment needs primary source_ids;
 a combined paragraph may cite several. Every primary unit needs exactly one coverage entry.
 Use disposition 'narrated' if ANY of it is narrated; otherwise use 'omitted' with a specific
@@ -62,6 +71,25 @@ it. Use uncertainties for unreadable or ambiguous source material; never hide un
 Only heading segments have display_title and heading_level; other segments use empty
 display_title and heading_level=0. Text fields contain only speech, with no delimiters.
 """
+)
+
+# This additive capability does not invalidate previously accepted paragraph-only
+# narration. Reconstruct its exact policy for narrowly matched checkpoint lookup;
+# all new model requests use NARRATION_POLICY above.
+PARAGRAPH_ONLY_NARRATION_POLICY = NARRATION_POLICY.replace(
+    CONTINUITY_POLICY,
+    """Continuity and ownership: narrate ALL primary source units, each exactly once. Adjacent
+context units are ONLY context; do not narrate or cite their source IDs. Do not borrow
+future words to complete the last sentence: retain an unfinished final paragraph so that
+the next batch can continue it. Rejoin paragraphs across pages within the current batch.
+If the first paragraph continues the previous batch's last prose paragraph, return only
+the new words in that paragraph and set continues_previous=true. That continuation must
+be the FIRST segment, before top-of-page figures. Never repeat the supplied previous
+narration. Do not set continues_previous on any other segment. If a word is hyphenated
+across the boundary, preserve its two parts and terminal hyphen for deterministic joining.
+""",
+    1,
+)
 
 REVIEW_POLICY = """You are the source-grounded editor of a technical audiobook. Compare the
 proposed narration against ALL primary source text and images using the narration policy.
