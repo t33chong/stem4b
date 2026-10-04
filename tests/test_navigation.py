@@ -2,12 +2,12 @@ import json
 
 import pytest
 
-from technical_audiobook.api import TruncatedResponse
-from technical_audiobook.audio import speech_plan
-from technical_audiobook.chunking import plan_chunks
-from technical_audiobook.config import Config
-from technical_audiobook.front_matter import FrontMatterDecision, review_front_matter
-from technical_audiobook.models import (
+from stem4b.api import TruncatedResponse
+from stem4b.audio import speech_plan
+from stem4b.chunking import plan_chunks
+from stem4b.config import Config
+from stem4b.front_matter import FrontMatterDecision, review_front_matter
+from stem4b.models import (
     Book,
     Coverage,
     Draft,
@@ -17,15 +17,15 @@ from technical_audiobook.models import (
     TocEntry,
     Transcript,
 )
-from technical_audiobook.narration import Narrator
-from technical_audiobook.narration_text import load_script, save_narration
-from technical_audiobook.navigation import (
+from stem4b.narration import Narrator
+from stem4b.narration_text import load_script, save_narration
+from stem4b.navigation import (
     number_words,
     reconcile_toc,
     standard_heading,
     validate_published_navigation,
 )
-from technical_audiobook.storage import read_json, write_json
+from stem4b.storage import read_json, write_json
 
 pytestmark = pytest.mark.usefixtures("scripted_generation")
 
@@ -540,7 +540,7 @@ def test_manual_edits_are_protected_and_published_navigation_is_checked(workspac
     assert read_json(workspace / "toc-report.json")["status"] == "edited_text_conflict"
     guide = (workspace / "toc-report.md").read_text()
     assert "Your edits were preserved" in guide
-    assert "audiobook synthesize" in guide
+    assert "stem4b synthesize" in guide
     assert "reconcile = false" not in guide
 
 

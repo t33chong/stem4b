@@ -1,8 +1,8 @@
 import pytest
 
-from technical_audiobook.chunking import plan_chunks
-from technical_audiobook.config import Config
-from technical_audiobook.models import (
+from stem4b.chunking import plan_chunks
+from stem4b.config import Config
+from stem4b.models import (
     Book,
     Coverage,
     Draft,
@@ -12,10 +12,10 @@ from technical_audiobook.models import (
     TocEntry,
     Transcript,
 )
-from technical_audiobook.narration import Narrator
-from technical_audiobook.narration_text import load_script
-from technical_audiobook.navigation import reconcile_toc
-from technical_audiobook.storage import read_json, write_json
+from stem4b.narration import Narrator
+from stem4b.narration_text import load_script
+from stem4b.navigation import reconcile_toc
+from stem4b.storage import read_json, write_json
 
 pytestmark = pytest.mark.usefixtures("scripted_generation")
 

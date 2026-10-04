@@ -4,11 +4,11 @@ import shutil
 import pytest
 from conftest import Reply, wave_bytes
 
-from technical_audiobook.chapters import BoundaryDecision
-from technical_audiobook.cli import main
-from technical_audiobook.config import Config, LLMConfig, TTSConfig
-from technical_audiobook.models import Draft, Review
-from technical_audiobook.pipeline import convert, preflight_output, synthesize_transcript
+from stem4b.chapters import BoundaryDecision
+from stem4b.cli import main
+from stem4b.config import Config, LLMConfig, TTSConfig
+from stem4b.models import Draft, Review
+from stem4b.pipeline import convert, preflight_output, synthesize_transcript
 
 
 @pytest.mark.parametrize("book_fixture", ["pdf_book", "epub_book"])
@@ -130,7 +130,7 @@ def test_end_to_end_book_to_m4b(
 
 
 def test_offline_cli_extract(pdf_book, tmp_path, capsys, monkeypatch):
-    # The CLI discovers audiobook.toml and .env in its working directory. Do not
+    # The CLI discovers configuration and .env in its working directory. Do not
     # apply a user's real book/page selection to this synthetic three-page PDF.
     monkeypatch.chdir(tmp_path)
     output = tmp_path / "book.m4b"
@@ -143,6 +143,15 @@ def test_offline_cli_extract(pdf_book, tmp_path, capsys, monkeypatch):
 def test_missing_model_fails_before_processing(pdf_book, tmp_path):
     with pytest.raises(ValueError, match="Set a model"):
         convert(pdf_book, tmp_path / "out.m4b", tmp_path / "work", Config())
+    assert not (tmp_path / "work").exists()
+
+
+def test_placeholder_voice_fails_before_paid_narration(pdf_book, tmp_path):
+    config = Config(
+        llm=LLMConfig(model="vision"), tts=TTSConfig(model="speech", voice="your-voice")
+    )
+    with pytest.raises(ValueError, match="tts.voice"):
+        convert(pdf_book, tmp_path / "out.m4b", tmp_path / "work", config)
     assert not (tmp_path / "work").exists()
 
 

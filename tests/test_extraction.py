@@ -2,10 +2,10 @@ from pathlib import Path
 
 import pytest
 
-from technical_audiobook.chunking import plan_chunks
-from technical_audiobook.config import ExtractionConfig, NarrationConfig
-from technical_audiobook.extract import embedded_svg, epub_reference, extract_book, save_image
-from technical_audiobook.models import Book, SourceUnit
+from stem4b.chunking import plan_chunks
+from stem4b.config import ExtractionConfig, NarrationConfig
+from stem4b.extract import embedded_svg, epub_reference, extract_book, save_image
+from stem4b.models import Book, SourceUnit
 
 
 def test_pdf_renders_every_page_and_keeps_outline(pdf_book, workspace):

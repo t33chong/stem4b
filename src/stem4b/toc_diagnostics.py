@@ -180,7 +180,7 @@ def explain_report(report: dict, book: Book | None = None) -> dict:
         result["recovery_steps"] = [
             "Back up narration.txt, then restore its generated headings, spoken headings and "
             "opening structure while retaining your prose edits, and rerun the same convert command.",
-            "If the changes are deliberate, use audiobook synthesize PATH/TO/narration.txt "
+            "If the changes are deliberate, use stem4b synthesize PATH/TO/narration.txt "
             "-c YOUR_CONFIG.toml -o YOUR_OUTPUT.m4b. This uses your text without source-TOC alignment.",
         ]
         return result
@@ -346,7 +346,7 @@ def render_report(report: dict) -> str:
 def write_toc_report(report: dict, work: Path, book: Book | None = None) -> dict:
     explained = explain_report(report, book)
     explained["instructions_file"] = str(work / "toc-report.md")
-    explained["repair_command"] = shell_join(["audiobook", "repair-toc", str(work)])
+    explained["repair_command"] = shell_join(["stem4b", "repair-toc", str(work)])
     atomic_text(work / "toc-report.md", render_report(explained))
     write_json(work / "toc-report.json", explained)
     return explained
@@ -361,7 +361,7 @@ def failure_details(report: dict, work: Path) -> str:
     next_step = (
         "Restore generated headings/opening structure, or explicitly synthesize your edited script."
         if report["status"] == "edited_text_conflict"
-        else f"Resolve individual entries offline: {shell_join(['audiobook', 'repair-toc', str(work)])}. "
+        else f"Resolve individual entries offline: {shell_join(['stem4b', 'repair-toc', str(work)])}. "
         "For an explicit bypass, set reconcile = false in your config's [navigation] table "
         "and rerun the same command with --until narrate; review the resulting headings before TTS."
     )

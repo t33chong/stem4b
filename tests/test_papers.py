@@ -5,11 +5,11 @@ import pymupdf
 import pytest
 from conftest import Reply, wave_bytes
 
-from technical_audiobook.chunking import Chunk
-from technical_audiobook.cli import main
-from technical_audiobook.config import Config, LLMConfig, NarrationConfig, TTSConfig, load_config
-from technical_audiobook.front_matter import review_front_matter
-from technical_audiobook.models import (
+from stem4b.chunking import Chunk
+from stem4b.cli import main
+from stem4b.config import Config, LLMConfig, NarrationConfig, TTSConfig, load_config
+from stem4b.front_matter import review_front_matter
+from stem4b.models import (
     Book,
     Coverage,
     Draft,
@@ -19,16 +19,16 @@ from technical_audiobook.models import (
     TocEntry,
     Transcript,
 )
-from technical_audiobook.narration import NARRATION_VERSION, Narrator, check_coverage
-from technical_audiobook.narration_text import load_script
-from technical_audiobook.navigation import (
+from stem4b.narration import NARRATION_VERSION, Narrator, check_coverage
+from stem4b.narration_text import load_script
+from stem4b.navigation import (
     reconcile_toc,
     standard_heading,
     validate_source_destinations,
 )
-from technical_audiobook.pipeline import convert
-from technical_audiobook.prompts import NARRATION_POLICY, PAPER_POLICY, REVIEW_POLICY
-from technical_audiobook.storage import digest, read_json
+from stem4b.pipeline import convert
+from stem4b.prompts import NARRATION_POLICY, PAPER_POLICY, REVIEW_POLICY
+from stem4b.storage import digest, read_json
 
 
 def heading(title, sid, level=1, spoken=None):

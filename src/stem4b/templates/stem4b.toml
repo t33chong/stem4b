@@ -1,4 +1,6 @@
 [llm]
+# Replace the endpoint/model/voice placeholders before narration or synthesis.
+# Base URLs are API roots, not /chat/completions or /audio/speech URLs.
 base_url = "http://localhost:4000/v1"
 model = "your-vision-model"
 api_key_env = "LLM_API_KEY"

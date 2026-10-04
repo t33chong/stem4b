@@ -8,15 +8,15 @@ from conftest import Reply, wave_bytes
 from openai import OpenAI
 from PIL import Image
 
-from technical_audiobook.api import client_options
-from technical_audiobook.audio import package, speech_plan, synthesize
-from technical_audiobook.cli import main
-from technical_audiobook.config import Config, ExtractionConfig, TTSConfig
-from technical_audiobook.covers import audio_hash, probe_media, repair_cover, verify_cover_repair
-from technical_audiobook.extract import EXTRACT_VERSION, extract_book, extract_cover
-from technical_audiobook.models import Coverage, Segment, Transcript
-from technical_audiobook.narration_text import load_script, save_narration
-from technical_audiobook.storage import digest, file_digest, read_json, write_json
+from stem4b.api import client_options
+from stem4b.audio import package, speech_plan, synthesize
+from stem4b.cli import main
+from stem4b.config import Config, ExtractionConfig, TTSConfig
+from stem4b.covers import audio_hash, probe_media, repair_cover, verify_cover_repair
+from stem4b.extract import EXTRACT_VERSION, extract_book, extract_cover
+from stem4b.models import Coverage, Segment, Transcript
+from stem4b.narration_text import load_script, save_narration
+from stem4b.storage import digest, file_digest, read_json, write_json
 
 
 def cover_epub(tmp_path, declaration):
@@ -113,7 +113,7 @@ def test_missing_cover_cache_migrates_without_reextracting_units(
     def fail(*args):
         raise AssertionError("Cover migration must not re-extract the narration source")
 
-    monkeypatch.setattr(f"technical_audiobook.extract.extract_{kind}", fail)
+    monkeypatch.setattr(f"stem4b.extract.extract_{kind}", fail)
     restored = extract_book(source, workspace, config)
     assert restored == original
     assert read_json(cache)["cover"] == original.cover.model_dump()
@@ -190,7 +190,7 @@ def test_offline_cover_repair_preserves_audio_chapters_edits_and_resume(
     original_audio = audio_hash(output)
     with monkeypatch.context() as patch:
         patch.setattr(
-            "technical_audiobook.covers.audio_hash",
+            "stem4b.covers.audio_hash",
             lambda path: original_audio if path.resolve() == output.resolve() else "changed audio",
         )
         with pytest.raises(ValueError, match="changed encoded audio"):
@@ -208,7 +208,7 @@ def test_offline_cover_repair_preserves_audio_chapters_edits_and_resume(
     def unexpected(*args, **kwargs):
         raise AssertionError("Cover repair must remain offline")
 
-    monkeypatch.setattr("technical_audiobook.pipeline.OpenAI", unexpected)
+    monkeypatch.setattr("stem4b.pipeline.OpenAI", unexpected)
     monkeypatch.chdir(tmp_path)
     assert (
         main(["repair-cover", str(pdf_book), "--work-dir", str(workspace), "-o", str(output)]) == 0

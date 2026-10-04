@@ -6,9 +6,23 @@ __pycache__/
 dist/
 *.egg-info/
 .env
-audiobook.toml
+.env.*
+!.env.example
+/audiobook.toml
+/stem4b.toml
+# Book-specific settings and inputs are local, not part of the distribution.
+/*.toml
+!/pyproject.toml
+!/*.example.toml
 *.work/
 *.m4b
 .DS_Store
 reference/
 books/
+papers/
+build/
+# Local scratch notes.
+/TODO.md
+*.m4a
+*.mp3
+*.wav

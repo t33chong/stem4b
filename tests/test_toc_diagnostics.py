@@ -2,9 +2,9 @@ from copy import deepcopy
 
 import pytest
 
-from technical_audiobook.models import Book, SourceUnit
-from technical_audiobook.storage import read_json
-from technical_audiobook.toc_diagnostics import (
+from stem4b.models import Book, SourceUnit
+from stem4b.storage import read_json
+from stem4b.toc_diagnostics import (
     explain_report,
     failure_details,
     render_report,
@@ -64,8 +64,8 @@ def test_legacy_report_can_be_explained_without_source_or_narration_changes():
 def test_cli_logs_actionable_toc_errors_without_needing_verbose(
     workspace, monkeypatch, caplog, verbose
 ):
-    from technical_audiobook.cli import main
-    from technical_audiobook.config import Config
+    from stem4b.cli import main
+    from stem4b.config import Config
 
     def fail(*args):
         report = write_toc_report(old_report(), workspace)
@@ -73,9 +73,9 @@ def test_cli_logs_actionable_toc_errors_without_needing_verbose(
             "Source TOC reconciliation needs attention. " + failure_details(report, workspace)
         )
 
-    monkeypatch.setattr("technical_audiobook.cli.convert", fail)
-    monkeypatch.setattr("technical_audiobook.cli.load_config", lambda path: Config())
-    monkeypatch.setattr("technical_audiobook.cli.load_dotenv", lambda *args, **kwargs: None)
+    monkeypatch.setattr("stem4b.cli.convert", fail)
+    monkeypatch.setattr("stem4b.cli.load_config", lambda path: Config())
+    monkeypatch.setattr("stem4b.cli.load_dotenv", lambda *args, **kwargs: None)
     args = ["convert", "unused.pdf", "-o", str(workspace / "unused.m4b")]
     assert main(args + (["--verbose"] if verbose else [])) == 1
     for expected in [

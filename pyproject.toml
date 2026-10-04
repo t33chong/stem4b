@@ -1,13 +1,23 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "technical-audiobook-generator"
+name = "stem4b"
 version = "0.1.0"
 description = "Turn technical PDFs and EPUBs into accessible, chaptered M4B audiobooks."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE", "THIRD_PARTY_NOTICES.md"]
 requires-python = ">=3.11"
+keywords = ["audiobook", "tts", "pdf", "epub", "stem", "m4b"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
 dependencies = [
   "beautifulsoup4>=4.12,<5",
   "defusedxml>=0.7,<1",
@@ -23,10 +33,18 @@ dependencies = [
 dev = ["pytest>=8,<10", "ruff>=0.11,<1"]
 
 [project.scripts]
-audiobook = "technical_audiobook.cli:main"
+stem4b = "stem4b.cli:main"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/technical_audiobook"]
+packages = ["src/stem4b"]
+
+# Keep local books, credentials, workspaces and scratch files out of releases.
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src/stem4b", "/tests", "/docs", "/README.md", "/pyproject.toml",
+  "/LICENSE", "/THIRD_PARTY_NOTICES.md", "/CONTRIBUTING.md",
+  "/Dockerfile", "/.dockerignore", "/.gitignore",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

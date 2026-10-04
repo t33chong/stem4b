@@ -6,11 +6,11 @@ import pytest
 from conftest import Reply
 from openai import APIConnectionError, APIError, APIStatusError, APITimeoutError, OpenAI
 
-from technical_audiobook.api import NarrationError, TruncatedResponse, client_options, generate_json
-from technical_audiobook.audio import synthesize_speech
-from technical_audiobook.cli import main
-from technical_audiobook.config import LLMConfig, TTSConfig, load_config
-from technical_audiobook.models import Review
+from stem4b.api import NarrationError, TruncatedResponse, client_options, generate_json
+from stem4b.audio import synthesize_speech
+from stem4b.cli import main
+from stem4b.config import LLMConfig, TTSConfig, load_config
+from stem4b.models import Review
 
 
 def completion(content='{"approved":true}', finish="stop", **fields):
@@ -78,7 +78,7 @@ def test_independent_credentials_base_urls_and_optional_fields(monkeypatch, work
 
 
 def test_schema_repair_and_flex_retry(workspace, sdk_server, monkeypatch):
-    monkeypatch.setattr("technical_audiobook.api.sleep", lambda _: None)
+    monkeypatch.setattr("stem4b.api.sleep", lambda _: None)
     replies = iter(
         [
             Reply({"error": "busy"}, 429, {"retry-after-ms": "1"}),
@@ -407,7 +407,7 @@ def test_cli_logs_provider_errors_without_request_payloads(
                     client, config, workspace, "private-book-content", workspace / "speech.wav"
                 )
 
-        monkeypatch.setattr("technical_audiobook.cli.convert", fail)
+        monkeypatch.setattr("stem4b.cli.convert", fail)
         args = ["convert", "unused.pdf", "-o", str(workspace / "unused.m4b")]
         assert main(args + (["--verbose"] if verbose else [])) == 1
     body = json.dumps(reply.body) if isinstance(reply.body, dict) else reply.body.decode()
@@ -429,7 +429,7 @@ def test_cli_logs_connection_error_details(monkeypatch, workspace, caplog, timeo
             raise APITimeoutError(request=request) from TimeoutError("provider read timed out")
         raise APIConnectionError(request=request) from OSError("DNS lookup failed")
 
-    monkeypatch.setattr("technical_audiobook.cli.convert", fail)
+    monkeypatch.setattr("stem4b.cli.convert", fail)
     assert main(["convert", "unused.pdf", "-o", str(workspace / "unused.m4b")]) == 1
     assert "configured retries" in caplog.text
     assert ("APITimeoutError" if timeout else "APIConnectionError") in caplog.text
@@ -442,7 +442,7 @@ def test_cli_logs_other_sdk_error_details(monkeypatch, workspace, caplog, body):
     def fail(*args, **kwargs):
         raise APIError("Provider parsing failed", request=SimpleNamespace(), body=body)
 
-    monkeypatch.setattr("technical_audiobook.cli.convert", fail)
+    monkeypatch.setattr("stem4b.cli.convert", fail)
     assert main(["convert", "unused.pdf", "-o", str(workspace / "unused.m4b")]) == 1
     assert "Provider parsing failed" in caplog.text
     assert (json.dumps(body) if isinstance(body, dict) else body) in caplog.text
@@ -456,7 +456,7 @@ def test_cli_logs_json_returned_instead_of_audio(monkeypatch, workspace, sdk_ser
         def fail(*args, **kwargs):
             synthesize_speech(client, config, workspace, "Test", workspace / "speech.wav")
 
-        monkeypatch.setattr("technical_audiobook.cli.convert", fail)
+        monkeypatch.setattr("stem4b.cli.convert", fail)
         assert main(["convert", "unused.pdf", "-o", str(workspace / "unused.m4b")]) == 1
     assert "instead of audio bytes" in caplog.text
     assert "Unknown voice" in caplog.text

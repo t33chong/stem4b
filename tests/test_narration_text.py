@@ -1,9 +1,9 @@
 import pytest
 
-from technical_audiobook.audio import speech_plan
-from technical_audiobook.config import AudioConfig, Config, TTSConfig
-from technical_audiobook.models import Asset, Segment, Transcript
-from technical_audiobook.narration_text import (
+from stem4b.audio import speech_plan
+from stem4b.config import AudioConfig, Config, TTSConfig
+from stem4b.models import Asset, Segment, Transcript
+from stem4b.narration_text import (
     FORMAT,
     legacy_text,
     load_script,
@@ -11,7 +11,7 @@ from technical_audiobook.narration_text import (
     render_text,
     save_narration,
 )
-from technical_audiobook.storage import write_json
+from stem4b.storage import write_json
 
 
 @pytest.fixture
