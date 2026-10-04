@@ -5,20 +5,20 @@ import pytest
 from conftest import Reply
 from openai import APIConnectionError, APIStatusError, OpenAI
 
-from technical_audiobook.api import (
+from stem4b.api import (
     _retry_after_seconds,
     client_options,
     generate_json,
 )
-from technical_audiobook.config import LLMConfig
-from technical_audiobook.models import Review
+from stem4b.config import LLMConfig
+from stem4b.models import Review
 
 
 @pytest.fixture
 def waits(monkeypatch):
     delays = []
-    monkeypatch.setattr("technical_audiobook.api.sleep", delays.append)
-    monkeypatch.setattr("technical_audiobook.api.random.uniform", lambda a, b: 1.0)
+    monkeypatch.setattr("stem4b.api.sleep", delays.append)
+    monkeypatch.setattr("stem4b.api.random.uniform", lambda a, b: 1.0)
     return delays
 
 
@@ -297,7 +297,7 @@ def test_long_retry_after_never_retries_early_or_falls_back(workspace, sdk_serve
     ],
 )
 def test_retry_after_formats(monkeypatch, headers, expected):
-    monkeypatch.setattr("technical_audiobook.api.time", lambda: 100)
+    monkeypatch.setattr("stem4b.api.time", lambda: 100)
     assert _retry_after_seconds(headers) == expected
 
 
@@ -331,13 +331,13 @@ def test_flex_jitter_and_interrupt_propagation(workspace, sdk_server, monkeypatc
         calls.append(request)
         return Reply({"error": "busy"}, 503)
 
-    monkeypatch.setattr("technical_audiobook.api.random.uniform", lambda a, b: 0.8)
+    monkeypatch.setattr("stem4b.api.random.uniform", lambda a, b: 0.8)
 
     def interrupted(delay):
         assert delay == 4
         raise KeyboardInterrupt
 
-    monkeypatch.setattr("technical_audiobook.api.sleep", interrupted)
+    monkeypatch.setattr("stem4b.api.sleep", interrupted)
     config = LLMConfig(
         model="test",
         base_url=sdk_server(handle),

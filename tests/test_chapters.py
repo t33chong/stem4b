@@ -3,11 +3,11 @@ import threading
 
 import pytest
 
-from technical_audiobook.api import TruncatedResponse
-from technical_audiobook.chapters import BoundaryDecision, ChapterPlanner, chapter_candidates
-from technical_audiobook.chunking import plan_chunks
-from technical_audiobook.config import Config, LLMConfig, NarrationConfig
-from technical_audiobook.models import (
+from stem4b.api import TruncatedResponse
+from stem4b.chapters import BoundaryDecision, ChapterPlanner, chapter_candidates
+from stem4b.chunking import plan_chunks
+from stem4b.config import Config, LLMConfig, NarrationConfig
+from stem4b.models import (
     Book,
     Coverage,
     Draft,
@@ -18,8 +18,8 @@ from technical_audiobook.models import (
     SourceUnit,
     TocEntry,
 )
-from technical_audiobook.narration import Narrator
-from technical_audiobook.storage import read_json, write_json
+from stem4b.narration import Narrator
+from stem4b.storage import read_json, write_json
 
 pytestmark = pytest.mark.usefixtures("scripted_generation")
 

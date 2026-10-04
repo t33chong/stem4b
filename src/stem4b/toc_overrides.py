@@ -63,7 +63,7 @@ def load_corrections(work: Path, book: Book) -> dict[int, TocCorrection]:
         return result
     except ValueError as exc:
         raise ValueError(
-            f"Invalid {path}: {exc}. Use {shell_join(['audiobook', 'repair-toc', str(work), '--reset'])} "
+            f"Invalid {path}: {exc}. Use {shell_join(['stem4b', 'repair-toc', str(work), '--reset'])} "
             "to back up and clear these corrections, then review again. Narration is unaffected."
         ) from exc
 

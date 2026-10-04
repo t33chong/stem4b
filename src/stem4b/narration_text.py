@@ -9,6 +9,7 @@ from .models import Asset, Transcript
 from .storage import atomic_text, read_json, write_json
 
 log = logging.getLogger(__name__)
+# Persisted format identifier, intentionally independent of the CLI/package name.
 FORMAT = "Format: audiobook-text-v1"
 HEADING = re.compile(r"^(#{1,6}) (\S.*)$")
 

@@ -5,8 +5,8 @@ import pytest
 from conftest import Reply, wave_bytes
 from openai import OpenAI
 
-from technical_audiobook.api import client_options
-from technical_audiobook.audio import (
+from stem4b.api import client_options
+from stem4b.audio import (
     ffmetadata,
     package,
     pronounce,
@@ -14,9 +14,9 @@ from technical_audiobook.audio import (
     speech_plan,
     synthesize,
 )
-from technical_audiobook.chunking import split_speech
-from technical_audiobook.config import AudioConfig, Config, TTSConfig
-from technical_audiobook.models import Segment, Transcript
+from stem4b.chunking import split_speech
+from stem4b.config import AudioConfig, Config, TTSConfig
+from stem4b.models import Segment, Transcript
 
 
 def transcript():

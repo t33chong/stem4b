@@ -1,0 +1,14 @@
+# Allowlist: books, credentials, workspaces and Git history never enter the build context.
+**
+!Dockerfile
+!.dockerignore
+!pyproject.toml
+!README.md
+!LICENSE
+!THIRD_PARTY_NOTICES.md
+!src/
+!src/stem4b/
+!src/stem4b/*.py
+!src/stem4b/templates/
+!src/stem4b/templates/stem4b.toml
+!src/stem4b/templates/example.env

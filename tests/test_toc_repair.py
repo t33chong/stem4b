@@ -1,9 +1,9 @@
 import pytest
 from filelock import FileLock
 
-from technical_audiobook.cli import main
-from technical_audiobook.config import Config
-from technical_audiobook.models import (
+from stem4b.cli import main
+from stem4b.config import Config
+from stem4b.models import (
     Book,
     Coverage,
     Segment,
@@ -12,11 +12,11 @@ from technical_audiobook.models import (
     TocEntry,
     Transcript,
 )
-from technical_audiobook.narration_text import save_narration
-from technical_audiobook.navigation import reconcile_toc, validate_source_destinations
-from technical_audiobook.storage import digest, read_json, write_json
-from technical_audiobook.toc_overrides import TocCorrection, load_corrections, save_corrections
-from technical_audiobook.toc_repair import _destination, repair_toc
+from stem4b.narration_text import save_narration
+from stem4b.navigation import reconcile_toc, validate_source_destinations
+from stem4b.storage import digest, read_json, write_json
+from stem4b.toc_overrides import TocCorrection, load_corrections, save_corrections
+from stem4b.toc_repair import _destination, repair_toc
 
 
 def case(work, text="Source explanation.", bookmark="Old label", accepted="4. New Title"):
@@ -179,7 +179,7 @@ def test_guided_heading_selection_publishes_offline_and_convert_reuses_correctio
     def no_api(*args, **kwargs):
         raise AssertionError("Offline repair must not make provider calls")
 
-    monkeypatch.setattr("technical_audiobook.api.generate_json", no_api)
+    monkeypatch.setattr("stem4b.api.generate_json", no_api)
     source = (workspace / "source.json").read_bytes()
     result = repair_toc(workspace, ask=answers("", "1", "y", "y"))
     assert result == workspace / "narration.txt"
@@ -283,7 +283,7 @@ def test_workspace_lock_and_noninteractive_cli_are_clear(workspace, monkeypatch,
     assert main(["repair-toc", str(workspace)]) == 1
     assert "interactive terminal" in caplog.text
     monkeypatch.setattr(
-        "technical_audiobook.cli.load_config", lambda *a: pytest.fail("Provider config not needed")
+        "stem4b.cli.load_config", lambda *a: pytest.fail("Provider config not needed")
     )
     assert main(["repair-toc", str(workspace), "--check"]) == 1
     assert "cannot safely retain numbering" in caplog.text
@@ -310,7 +310,7 @@ def test_explicit_backup_replacement_and_rollback(workspace, monkeypatch, fail_p
         def fail(*args):
             raise ValueError("Simulated publication failure")
 
-        monkeypatch.setattr("technical_audiobook.toc_repair.validate_published_navigation", fail)
+        monkeypatch.setattr("stem4b.toc_repair.validate_published_navigation", fail)
         with pytest.raises(ValueError, match="Simulated publication failure"):
             repair_toc(workspace, publish=True, backup_edits=True)
         assert (text.read_bytes(), baseline.read_bytes()) == before

@@ -1,0 +1,60 @@
+name: Checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: python -m pip install '.[dev]' build
+      - run: ruff check src tests
+      - run: ruff format --check src tests
+      - run: pytest -q
+      - run: python -m build
+      - name: Installed-wheel setup smoke test
+        run: |
+          python -m pip install --force-reinstall --no-deps dist/*.whl
+          trial_dir=$(mktemp -d)
+          cd "$trial_dir"
+          stem4b --version
+          stem4b init
+          stem4b doctor --stage extract
+
+  docker:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: docker build -t stem4b:ci .
+      - run: docker run --rm --network none stem4b:ci --version
+      - name: Non-root setup and dependency checks
+        run: |
+          trial_dir=$(mktemp -d)
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$trial_dir,dst=/data" stem4b:ci init
+          docker run --rm --network none --user "$(id -u):$(id -g)" \
+            --mount "type=bind,src=$trial_dir,dst=/data" \
+            -e LLM_MODEL=test-vision -e TTS_MODEL=test-speech -e TTS_VOICE=test-voice \
+            stem4b:ci doctor

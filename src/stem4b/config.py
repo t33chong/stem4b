@@ -32,9 +32,10 @@ class Endpoint(Model):
         return os.getenv(self.api_key_env, "")
 
     def require_model(self):
-        if not self.model or self.model.startswith("your-"):
+        if not self.model.strip() or self.model.startswith("your-"):
             raise ValueError(
-                "Set a model in the configuration or the corresponding environment variable"
+                "Set a model in [llm] / [tts] in your configuration "
+                "(or LLM_MODEL / TTS_MODEL). Run 'stem4b init' for an example configuration."
             )
 
 
@@ -96,6 +97,13 @@ class TTSConfig(Endpoint):
     instructions: str | None = None
     max_chars: int = Field(default=2500, ge=32)
     workers: int = Field(default=4, ge=1, le=32)
+
+    def require_model(self):
+        super().require_model()
+        if not self.voice.strip() or self.voice.startswith("your-"):
+            raise ValueError(
+                "Set tts.voice in your configuration (or TTS_VOICE) to a supported voice."
+            )
 
     @model_validator(mode="after")
     def reserved_options(self):
@@ -194,8 +202,13 @@ class Config(Model):
 
 
 def load_config(path: Path | None = None) -> Config:
-    data = tomllib.loads(path.read_text(encoding="utf-8")) if path else {}
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8")) if path else {}
+    except tomllib.TOMLDecodeError as exc:
+        raise ValueError(f"Invalid TOML configuration in {path}: {exc}") from exc
     for section in ("llm", "tts"):
+        if section in data and not isinstance(data[section], dict):
+            raise ValueError(f"{section} must be a TOML table, written as [{section}]")
         for name in (
             ("base_url", "model", "voice")
             if section == "tts"

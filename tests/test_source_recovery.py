@@ -2,11 +2,11 @@ import json
 
 import pytest
 
-from technical_audiobook.chunking import Chunk
-from technical_audiobook.config import Config, LLMConfig, NarrationConfig
-from technical_audiobook.models import Coverage, Draft, Finding, Review, Segment, SourceUnit
-from technical_audiobook.narration import Narrator, disputed_source_ids, source_content
-from technical_audiobook.storage import read_json, write_json
+from stem4b.chunking import Chunk
+from stem4b.config import Config, LLMConfig, NarrationConfig
+from stem4b.models import Coverage, Draft, Finding, Review, Segment, SourceUnit
+from stem4b.narration import Narrator, disputed_source_ids, source_content
+from stem4b.storage import read_json, write_json
 
 pytestmark = pytest.mark.usefixtures("scripted_generation")
 
@@ -153,7 +153,7 @@ def test_missing_local_payload_is_not_claimed_to_be_present(workspace, monkeypat
     config, chunk, directory, _, _ = recovery_case(workspace)
     actual_content = source_content(chunk, workspace, config, [])
     broken = [p for p in actual_content if not p["text"].startswith('{"source_id": "one"')]
-    monkeypatch.setattr("technical_audiobook.narration.source_content", lambda *args: broken)
+    monkeypatch.setattr("stem4b.narration.source_content", lambda *args: broken)
     with pytest.raises(ValueError, match="missing or changed in the local review payload"):
         Narrator(Responses(), config, workspace).chunk(chunk, [])
     assert not (directory / "accepted.json").exists()

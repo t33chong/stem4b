@@ -2,11 +2,11 @@ from zipfile import ZipFile
 
 import pytest
 
-from technical_audiobook.config import ExtractionConfig
-from technical_audiobook.extract import extract_book
-from technical_audiobook.models import Book, SourceUnit
-from technical_audiobook.source_toc import read_source_toc
-from technical_audiobook.storage import read_json, write_json
+from stem4b.config import ExtractionConfig
+from stem4b.extract import extract_book
+from stem4b.models import Book, SourceUnit
+from stem4b.source_toc import read_source_toc
+from stem4b.storage import read_json, write_json
 
 
 def epub_navigation(tmp_path, nav=None, ncx=None):
@@ -120,7 +120,7 @@ def test_old_extraction_cache_gains_toc_without_changing_units(pdf_book, workspa
     def no_extraction(*args):
         raise AssertionError("Navigation metadata must not re-extract source units")
 
-    monkeypatch.setattr("technical_audiobook.extract.extract_pdf", no_extraction)
+    monkeypatch.setattr("stem4b.extract.extract_pdf", no_extraction)
     again = extract_book(pdf_book, workspace, ExtractionConfig())
     assert again.units == book.units and again.toc == book.toc
     assert read_json(workspace / "source.json")["toc"]["kind"] == "pdf_outline"

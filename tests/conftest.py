@@ -86,7 +86,7 @@ def scripted_generation(monkeypatch):
         return client.generate(messages, schema, purpose, validate)
 
     for module in ("narration", "chapters", "front_matter"):
-        monkeypatch.setattr(f"technical_audiobook.{module}.generate_json", generate)
+        monkeypatch.setattr(f"stem4b.{module}.generate_json", generate)
 
 
 def wave_bytes(rate=22050, duration=0.12):

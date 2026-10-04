@@ -45,7 +45,13 @@ def write_json(path: Path, value: Any):
 
 
 def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Invalid JSON in {path} (line {exc.lineno}, column {exc.colno}). "
+            "Restore this file from a backup or correct its JSON syntax; keep the rest of the workspace."
+        ) from exc
 
 
 def asset_path(work: Path, relative: str) -> Path:
