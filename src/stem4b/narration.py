@@ -21,7 +21,7 @@ from .navigation import (
     validate_published_navigation,
     validate_source_destinations,
 )
-from .prompts import NARRATION_POLICY, PAPER_POLICY, REVIEW_POLICY
+from .prompts import NARRATION_POLICY, PAPER_POLICY, PARAGRAPH_ONLY_NARRATION_POLICY, REVIEW_POLICY
 from .storage import asset_path, atomic_text, digest, read_json, write_json
 
 log = logging.getLogger(__name__)
@@ -89,22 +89,32 @@ def check_coverage(draft: Draft, chunk: Chunk, *, document_type: str = "book"):
             raise ValueError("Only the FIRST segment may continue the previous batch")
 
 
+def continuation_target(segments: list[Segment], kind: str) -> int | None:
+    """Find the matching narration block without crossing a section heading."""
+    for index in range(len(segments) - 1, -1, -1):
+        if segments[index].kind == "heading":
+            break
+        if segments[index].kind == kind:
+            return index
+    return None
+
+
 def append_segments(previous: list[Segment], incoming: list[Segment]) -> list[Segment]:
     result = [segment.model_copy(deep=True) for segment in previous]
     for segment in incoming:
         if segment.continues_previous:
-            candidates = []
-            for index in range(len(result) - 1, -1, -1):
-                if result[index].kind == "heading":
-                    break
-                if result[index].kind == "paragraph":
-                    candidates.append(index)
-                    break
-            if not candidates:
-                raise ValueError("Continuation has no preceding prose paragraph in this section")
-            preceding = result[candidates[0]]
-            # A discretionary line-break hyphen should not become a spoken dash.
-            if preceding.text.endswith(("-", "\u00ad")) and segment.text[:1].islower():
+            target = continuation_target(result, segment.kind)
+            if target is None:
+                raise ValueError(
+                    f"Continuation has no preceding {segment.kind} segment in this section"
+                )
+            preceding = result[target]
+            # Rejoin prose line-break hyphens, but preserve operators in spoken code.
+            if (
+                segment.kind == "paragraph"
+                and preceding.text.endswith(("-", "\u00ad"))
+                and segment.text[:1].islower()
+            ):
                 preceding.text = preceding.text[:-1] + segment.text
             else:
                 preceding.text = preceding.text.rstrip() + " " + segment.text.lstrip()
@@ -200,17 +210,23 @@ class Narrator:
             [s.model_dump() for s in previous[-3:]],
         ]
 
-        def directory_for(options: dict) -> Path:
-            key = digest([*inputs[:4], options, *inputs[5:]])
+        def directory_for(options: dict, policy: str) -> Path:
+            key = digest([inputs[0], policy, *inputs[2:4], options, *inputs[5:]])
             return self.work / "narration" / f"{chunk.id}-{key[:20]}"
 
-        directory = directory_for(narration_options)
-        candidates = [directory]
+        policies = [self.policy]
+        if self.policy.startswith(NARRATION_POLICY):
+            policies.append(PARAGRAPH_ONLY_NARRATION_POLICY + self.policy[len(NARRATION_POLICY) :])
+        candidates = []
         # Original checkpoints included max_revisions (then restricted to 0–5).
         # Reconstruct their exact keys, preserving every source/prompt/model/context
         # check. Never reuse an arbitrary cache just because its section ID matches.
-        for limit in range(6):
-            candidates.append(directory_for({**narration_options, "max_revisions": limit}))
+        for policy in policies:
+            candidates.append(directory_for(narration_options, policy))
+            for limit in range(6):
+                candidates.append(
+                    directory_for({**narration_options, "max_revisions": limit}, policy)
+                )
         for candidate in candidates:
             if (candidate / "accepted.json").is_file():
                 return candidate
@@ -483,15 +499,10 @@ class Narrator:
             # Internal continuations are resolved here; an initial continuation remains external.
             first_segments = [s.model_copy(deep=True) for s in first.segments]
             second_segments = [s.model_copy(deep=True) for s in second.segments]
-            # A left half containing only omitted content or figures can still be
-            # followed by a continuation of prose from the PREVIOUS parent batch.
+            # If the left half has no matching block, the right half may still
+            # continue prose or code from the PREVIOUS parent batch.
             if second_segments and second_segments[0].continues_previous:
-                recent = []
-                for segment in reversed(first_segments):
-                    if segment.kind == "heading":
-                        break
-                    recent.append(segment.kind)
-                if "paragraph" not in recent:
+                if continuation_target(first_segments, second_segments[0].kind) is None:
                     continuation = second_segments.pop(0)
                     first_segments.insert(0, continuation)
             external = bool(first_segments and first_segments[0].continues_previous)

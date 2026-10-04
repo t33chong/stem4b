@@ -97,7 +97,7 @@ def speech_plan(transcript: Transcript | SpeechScript, config: Config) -> list[A
 
     for segment in transcript.segments:
         if segment.continues_previous:
-            raise ValueError("Transcript still contains an unresolved paragraph continuation")
+            raise ValueError("Transcript still contains an unresolved narration continuation")
         if segment.kind == "heading":
             flush()
             if segment.heading_level <= config.audio.toc_depth:
