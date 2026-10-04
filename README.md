@@ -278,6 +278,14 @@ checkpoints or ask the LLM to rewrite chapters.
   matched heading's resolved number and whether it came from the TOC or accepted
   narration. Rerunning `convert --until narrate` repairs older unedited exports from
   the accepted cache without re-narrating the book.
+- A stale **unnumbered PDF bookmark title** can yield to the printed numbered heading
+  when there is exactly one accepted heading and one retained TOC entry at that
+  destination, and the actual extracted heading lines corroborate both title and
+  number. Wrapped chapter openers are supported, including titles whose chapter number
+  extracts at the end when a separate running header confirms it. Outline hints, prose
+  mentions, ambiguous matches and conflicting explicit bookmark numbers are insufficient.
+  The audit retains the original bookmark and records `resolved_title`,
+  `source_heading_evidence` and numbering origin `printed_source_heading`.
 - By default, PDF chapter labels omit the `CHAPTER` prefix (`2. Theory`); EPUB labels
   retain that prefix when supplied by the source (`CHAPTER 2. Theory`). Both are spoken
   as `Chapter two. Theory.` Set `navigation.chapter_prefix` to `keep` or `omit` to override.
@@ -287,7 +295,13 @@ checkpoints or ask the LLM to rewrite chapters.
 - Already omitted content, such as excluded homework, does not acquire empty navigation
   entries. Missing headings are restored only at unambiguous source starts. Unresolved
   destinations, ambiguous placements or inconsistent ordering stop conversion with a
-  `toc-report.json` diagnostic; no final narration is overwritten by that reconciliation.
+  `toc-report.md` recovery guide and a `toc-report.json` audit; no final narration is
+  overwritten by that reconciliation.
+- With `narration.include_exercises = false`, navigation branches titled “Exercises”,
+  “Problems” or “Review Questions” are excluded **before** destination/order checks,
+  including broken bookmarks and entries on pages with retained material. No accepted
+  speech or source pages are deleted. Worked examples remain. Paper reference-list
+  navigation is treated similarly; subsequent technical appendices remain eligible.
 - If a PDF bookmark is one physical page early or late, reconciliation can match an
   existing accepted heading on the immediately adjacent page. This requires an exact
   title match in both the narration and actual extracted heading lines (up to three
@@ -323,6 +337,101 @@ while `narration.txt` contains edits, conversion stops for you to reconcile thos
 If only your edited script's headings or opening navigation differ, conversion also reports
 the conflict without overwriting your edits. Explicit `synthesize narration.txt` continues
 to honor your script as written, without re-running TOC alignment or source review.
+
+### Resolving TOC errors
+
+Open `WORKDIR/toc-report.md` first. It explains every issue, identifies the affected
+headings and source destinations, and gives recovery options. The JSON audit also
+contains structured `diagnostics` and `recovery_steps`. For ordering conflicts the
+report lists each backwards pair, including the original bookmark destination and
+the proposed correction. IDs such as `p00073` mean **physical PDF page 73**, not the
+page number printed on the page. Narration segment indices are zero-based positions
+in the assembled accepted narration, not section numbers.
+
+You do not need the textbook's authoring files, a PDF editor or a coding assistant.
+The program first applies the source-backed automatic corrections described above.
+For anything still ambiguous, run the exact command printed in the error, for example:
+
+```sh
+audiobook repair-toc books/MyBook.work
+```
+
+This is an **offline guided review**; it reads the saved source and accepted narration,
+not your API credentials. It does not change the PDF/EPUB or re-narrate sections.
+
+1. Select a reported TOC entry. The tool shows its source excerpt, location, a source
+   image path when available, and nearby accepted headings.
+2. Select the correct accepted heading (including its title and number), use `/text`
+   to search all accepted headings, or `n` to view more candidates. Alternatively,
+   `d` corrects a bookmark destination using a physical PDF page number or extracted
+   EPUB source-unit ID (`/text` at the destination prompt searches the source and lists
+   matching IDs and locations). For unwanted navigation, `o` omits **only that TOC entry**,
+   never its speech or children. Each change requires explicit confirmation.
+3. Choices are saved immediately in `toc-overrides.json`. The tool rechecks heading
+   uniqueness, locations and order after each choice; a selection is not permission
+   to produce inconsistent navigation. `u` undoes the selected entry's correction;
+   `q` exits with confirmed choices retained for the next run.
+4. Once validation passes, inspect `narration.toc-preview.txt`. The tool asks whether
+   to publish the repaired `narration.txt`; existing manual edits remain protected.
+   If publishing is blocked, compare your current script with the preview. Keep your
+   edited script, or move it aside as a backup before publishing the regenerated
+   version. Regeneration does not merge manual prose edits.
+
+For scripts or repeated checks:
+
+```sh
+audiobook repair-toc books/MyBook.work --check
+audiobook repair-toc books/MyBook.work --publish
+```
+
+If you deliberately want to replace edited text with the regenerated version:
+
+```sh
+audiobook repair-toc books/MyBook.work --publish --backup-edits
+```
+
+This first saves the existing `narration.txt` and its JSON baseline in a unique
+`toc-repair-backup-*` directory inside the workspace. It does not merge manual edits.
+The backup path is printed; normal `--publish` never opts into replacement implicitly.
+
+`--check` refreshes the audit and repaired preview without changing final narration.
+`--publish` validates and publishes without prompts, still refusing to overwrite manual
+edits. Both commands make **no model or TTS requests**. They use the final-pass settings
+saved by `convert`; no `-c` argument is needed. To change those settings, rerun `convert`
+with your original config first. Workspaces from older versions need one rerun of
+`convert --until narrate` to create `toc-input.json`; existing compatible section caches
+are reused. If repair happens before narration (`source_preflight`), it fixes destinations
+only; the tool then tells you to rerun `convert`, which may make paid narration requests.
+
+Corrections are tied to the source file, original TOC and the selected accepted heading.
+Changed inputs cannot silently reuse stale choices. `repair-toc WORKDIR --reset` backs
+up the correction file in `toc-override-history/` and clears it; `--reset --check` works
+without an interactive terminal. Prior correction versions are also kept on each edit.
+Corrections are reused by subsequent `convert` runs without changing narration cache
+identities. They affect final navigation only, not extraction hints or chapter partitioning.
+`toc-report.json` is still an audit, not the correction file; editing final `narration.txt`
+does not repair this pass, which works from accepted checkpoints.
+
+As a broader bypass, you can deliberately disable alignment in the existing `[navigation]` table
+  in the same configuration file used with `-c` (add it only if absent):
+
+```toml
+[navigation]
+reconcile = false
+```
+
+Rerun the same `convert` command with `--until narrate` first. This skips source-TOC
+matching, final heading standardization and source-backed front-matter review; it
+does **not** fix bookmarks. Review the resulting `narration.txt` before synthesizing.
+
+Keep your workspace and `accepted.json` checkpoints. After a final-pass failure, they
+are reused when the source, workspace and narration/model settings are unchanged.
+Changing only `navigation.reconcile` does not invalidate accepted narration. A failure
+during `source_preflight` is different: narration has not started, so proceeding may
+make new paid requests. Existing final narration, if any, may be an older export.
+Do not delete caches, use `--force`, or change LLM settings to retry a TOC error.
+Rerunning unchanged will reproduce it; editing/replacing the source file changes its
+identity and may require re-narration.
 
 ## Concurrent chapter narration
 
@@ -387,7 +496,9 @@ Useful workspace files:
 | `source.json`, `source/assets/` | Source evidence and page/figure images |
 | `plan.json` | Ordered source batches and initial request estimate |
 | `chapter-boundaries/`, `chapter-plan.json` | Cached source checks and independent narration jobs |
-| `toc-report.json`, `toc-front-matter/` | Final source-TOC audit and cached front-matter review |
+| `toc-report.md`, `toc-report.json`, `toc-front-matter/` | Readable TOC recovery guide, full audit and cached front-matter review |
+| `toc-input.json`, `toc-overrides.json`, `toc-override-history/` | Offline TOC repair input, book-specific choices and previous choices |
+| `narration.toc-preview.txt`, `narration.toc-preview.json` | Repaired preview from accepted narration; never silently replaces manual text edits |
 | `narration/*/draft-*.json`, `review-*.json` | Inspectable draft/review history |
 | `narration.txt` | Editable canonical speech script, with navigation headings |
 | `narration.json` | Generated narration baseline, source coverage and cover metadata |

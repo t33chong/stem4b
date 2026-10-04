@@ -226,6 +226,10 @@ def test_crossed_bookmark_corrections_fail_source_order_check(workspace):
     original.coverage[1].disposition, original.coverage[1].reason = "narrated", ""
     with pytest.raises(ValueError, match="corrections conflict with source TOC order"):
         reconcile_toc(original, book, Config(), workspace)
+    issue = read_json(workspace / "toc-report.json")["diagnostics"][0]
+    assert issue["code"] == "source_order_conflict"
+    assert issue["conflicts"][0]["previous"]["effective_location"].startswith("p00003")
+    assert issue["conflicts"][0]["following"]["effective_location"].startswith("p00002")
 
 
 def test_recovered_heading_cannot_violate_narration_order(workspace):
@@ -238,6 +242,64 @@ def test_recovered_heading_cannot_violate_narration_order(workspace):
     original.coverage[0].disposition, original.coverage[0].reason = "narrated", ""
     with pytest.raises(ValueError, match="not in source TOC order"):
         reconcile_toc(original, book, Config(), workspace)
+    issue = read_json(workspace / "toc-report.json")["diagnostics"][0]
+    assert issue["code"] == "narration_order_conflict"
+    pair = issue["conflicts"][0]
+    assert pair["previous"]["title"] == "Earlier topic"
+    assert pair["previous"]["segment"] > pair["following"]["segment"]
+
+
+def test_corrected_heading_followed_by_unresolved_exercises_has_actionable_report(workspace):
+    book, original = pdf_case(source_heading="Historical Notes")
+    book.toc.entries[0].title = "Historical Notes"
+    original.segments[1] = heading("p00003", "Historical Notes")
+    book.toc.entries.append(
+        TocEntry(title="Exercises", level=3, target="page:2", source_id="p00002")
+    )
+    original.coverage[1].disposition, original.coverage[1].reason = "narrated", ""
+    original.segments.insert(
+        0, Segment(kind="paragraph", text="Useful prior material.", source_ids=["p00002"])
+    )
+    untouched = original.model_dump()
+    published = workspace / "narration.txt"
+    published.write_text("Previously published narration, with manual edits.")
+    saved = published.read_bytes()
+    config = Config()
+    config.narration.include_exercises = True
+    with pytest.raises(ValueError) as caught:
+        reconcile_toc(original, book, config, workspace)
+    message = str(caught.value)
+    for expected in [
+        "2 issue(s)",
+        "Historical Notes",
+        "Exercises",
+        "physical PDF page 3",
+        "reconcile = false",
+        "[navigation]",
+        str(workspace / "toc-report.md"),
+        "No final narration was overwritten",
+    ]:
+        assert expected in message
+    report = read_json(workspace / "toc-report.json")
+    pair = report["diagnostics"][0]["conflicts"][0]
+    assert pair["previous"]["original_location"].startswith("p00002")
+    assert pair["previous"]["effective_location"].startswith("p00003")
+    assert pair["following"]["action"] == "unresolved"
+    assert report["entries"][1]["error"] == "Exercises: no safely located heading at p00002"
+    assert report["diagnostics"][1]["entries"][0]["title"] == "Exercises"
+    guide = (workspace / "toc-report.md").read_text()
+    assert "intentionally omitted" in guide
+    assert "Rerunning unchanged will repeat the failure" in guide
+    assert "not an override file" in guide
+    assert original.model_dump() == untouched
+    assert published.read_bytes() == saved
+    config.narration.include_exercises = False
+    result = reconcile_toc(original, book, config, workspace)
+    assert result.coverage == original.coverage
+    assert [s.text for s in result.segments if s.kind != "heading"] == [
+        s.text for s in original.segments if s.kind != "heading"
+    ]
+    assert read_json(workspace / "toc-report.json")["entries"][1]["action"] == "omitted_exercises"
 
 
 def test_one_heading_cannot_satisfy_two_bookmarks(workspace):

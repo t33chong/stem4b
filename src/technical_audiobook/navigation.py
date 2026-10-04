@@ -11,7 +11,9 @@ from bs4 import BeautifulSoup
 
 from .config import Config
 from .models import Book, Segment, TocEntry, Transcript
-from .storage import read_json, write_json
+from .storage import digest, read_json
+from .toc_diagnostics import failure_details, write_toc_report
+from .toc_overrides import load_corrections, save_toc_input
 
 log = logging.getLogger(__name__)
 
@@ -26,31 +28,41 @@ def validate_source_destinations(book: Book, config: Config, work: Path):
     if not config.navigation.reconcile:
         return
     ids = {u.id for u in book.units}
+    exclusions = _policy_exclusions(book.toc.entries, config)
+    corrections = load_corrections(work, book)
     unresolved = [
-        e
-        for e in book.toc.entries
+        (i, e)
+        for i, e in enumerate(book.toc.entries)
         if e.selected
-        and e.source_id not in ids
-        and not (config.narration.document_type == "paper" and is_reference_heading(e.title))
+        and i not in exclusions
+        and not (i in corrections and corrections[i].action == "omit")
+        and (corrections[i].source_id if i in corrections else e.source_id) not in ids
     ]
     if unresolved:
-        target = work / "toc-report.json"
-        write_json(
-            target,
+        save_toc_input(work, book, config)
+        report = write_toc_report(
             {
                 "source_sha256": book.source_sha256,
                 "source_toc": book.toc.kind,
                 "status": "needs_attention",
                 "phase": "source_preflight",
                 "errors": [
-                    f"{e.title}: {e.reason or 'unresolved source destination'}" for e in unresolved
+                    f"{e.title}: {e.reason or 'unresolved source destination'}"
+                    for _, e in unresolved
                 ],
-                "entries": [e.model_dump() for e in unresolved],
+                "entries": [
+                    {
+                        **e.model_dump(),
+                        "source_toc_entry": i + 1,
+                        "error": f"{e.title}: {e.reason or 'unresolved source destination'}",
+                    }
+                    for i, e in unresolved
+                ],
             },
+            work,
+            book,
         )
-        raise ValueError(
-            f"Source TOC has unresolved destinations; inspect {target}. No narration requests were made. Disable navigation.reconcile explicitly to proceed without alignment."
-        )
+        raise ValueError("Source TOC has unresolved destinations. " + failure_details(report, work))
 
 
 def number_words(number: str) -> str:
@@ -132,6 +144,36 @@ def is_reference_heading(title: str) -> bool:
         "works cited",
         "literature cited",
     }
+
+
+def _policy_exclusions(entries: list[TocEntry], config: Config) -> dict[int, dict]:
+    """Exclude navigation branches, never the source pages or accepted speech they cite."""
+    excluded = {}
+    parent_level, policy = None, None
+    for index, entry in enumerate(entries):
+        if parent_level is not None and entry.level <= parent_level:
+            parent_level, policy = None, None
+        if policy is None:
+            body = split_title(entry.title)[2].casefold().rstrip(".:").strip()
+            if not config.narration.include_exercises and body in {
+                "exercises",
+                "problems",
+                "review questions",
+            }:
+                policy = {
+                    "action": "omitted_exercises",
+                    "reason": "narration.include_exercises = false; navigation only, no speech removed",
+                }
+            elif config.narration.document_type == "paper" and is_reference_heading(entry.title):
+                policy = {
+                    "action": "omitted_reference_list",
+                    "reason": "Research-paper narration policy; navigation only, no speech removed",
+                }
+            if policy:
+                parent_level = entry.level
+        if policy:
+            excluded[index] = dict(policy)
+    return excluded
 
 
 def _matching_headings(title: str, headings: dict[int, Segment]) -> list[int]:
@@ -244,6 +286,58 @@ def _adjacent_pdf_destinations(
                 "adjacent_candidates": candidates,
             }
     return resolutions
+
+
+def _printed_pdf_heading(text: str, title: str) -> list[str]:
+    """Require the accepted title AND its number in actual extracted heading lines.
+
+    Some PDF layouts extract a chapter opener as 'CHAPTER / wrapped title4'.
+    Accept that limited layout only when a separate running header also explicitly
+    corroborates the chapter number. Neither outline hints nor prose mentions count.
+    """
+    prefix, number, body = split_title(title)
+    if not number:
+        return []
+    evidence = [
+        label
+        for label in _pdf_heading_evidence(text, title)
+        if split_title(label)[1].casefold() == number.casefold()
+    ]
+    if not number.isdigit() or (prefix and prefix.casefold() != "chapter"):
+        return evidence
+    lines = [
+        line.strip() for line in unicodedata.normalize("NFKC", text).splitlines() if line.strip()
+    ]
+    # A running header alone is insufficient; the following standalone CHAPTER
+    # marker and exact title/number block must independently corroborate it.
+    header = re.compile(r"(?:\d+\s+)?CHAPTER\s+" + re.escape(number) + r"\b", re.IGNORECASE)
+    for start, line in enumerate(lines[:12]):
+        if line.casefold() != "chapter" or not any(header.match(s) for s in lines[:start]):
+            continue
+        for end in range(start + 2, min(start + 5, len(lines) + 1)):
+            label = " ".join(lines[start + 1 : end])
+            if label.endswith(number) and title_key(label[: -len(number)].strip()) == title_key(
+                body
+            ):
+                evidence.append(" / ".join(lines[start:end]))
+    return evidence
+
+
+def _verified_printed_title(
+    entry: TocEntry, original: Segment, book: Book, unit, unique_destination: bool
+) -> str | None:
+    """A stale unnumbered bookmark may yield to one source-verified numbered heading."""
+    if (
+        book.format != "pdf"
+        or book.toc.kind != "pdf_outline"
+        or not unique_destination
+        or original.source_ids != [entry.source_id]
+        or split_title(entry.title)[1]
+        or title_key(entry.title) == title_key(original.display_title)
+    ):
+        return None
+    evidence = _printed_pdf_heading(unit.text, original.display_title)
+    return evidence[0] if len(evidence) == 1 else None
 
 
 def sentence(text: str) -> str:
@@ -370,6 +464,7 @@ def reconcile_toc(
     work: Path,
     omitted_front_ids: set[str] | None = None,
 ) -> Transcript:
+    save_toc_input(work, book, config, transcript, omitted_front_ids)
     result = transcript.model_copy(deep=True)
     report = {
         "source_sha256": book.source_sha256,
@@ -381,11 +476,10 @@ def reconcile_toc(
         "warnings": list(book.toc.warnings),
         "excluded_source_entries": [e.model_dump() for e in book.toc.entries if not e.selected],
     }
-    target = work / "toc-report.json"
     if not config.navigation.reconcile:
         report["status"] = "disabled"
         report["m4b_toc"] = planned_toc(result, config)
-        write_json(target, report)
+        write_toc_report(report, work, book)
         return result
     if not book.toc.entries:
         report["status"] = "no_source_toc"
@@ -410,7 +504,7 @@ def reconcile_toc(
         ]
         log.warning(report["warnings"][-1])
         report["m4b_toc"] = planned_toc(result, config)
-        write_json(target, report)
+        write_toc_report(report, work, book)
         return result
 
     omitted_front_ids = omitted_front_ids or set()
@@ -443,50 +537,89 @@ def reconcile_toc(
         item.source_id: item.reason for item in result.coverage if item.disposition == "omitted"
     }
     headings = {i: s for i, s in enumerate(result.segments) if s.kind == "heading"}
-    source_entries = [entry for entry in book.toc.entries if entry.selected]
+    selected_indices = [i for i, entry in enumerate(book.toc.entries) if entry.selected]
+    source_entries = [book.toc.entries[i] for i in selected_indices]
     entries = [entry.model_copy() for entry in source_entries]
-    omitted_reference_indices = set()
+    policies = _policy_exclusions(book.toc.entries, config)
+    excluded = {i: policies[index] for i, index in enumerate(selected_indices) if index in policies}
+    corrections = load_corrections(work, book)
+    manual = {
+        i: corrections[index] for i, index in enumerate(selected_indices) if index in corrections
+    }
+    forced, correction_errors = {}, {}
+    heading_ids = {}
+    for i, heading in headings.items():
+        heading_ids.setdefault(digest(heading), []).append(i)
+    for i, choice in manual.items():
+        if choice.action == "omit":
+            excluded[i] = {
+                "action": "omitted_user_navigation",
+                "reason": "User correction; all speech retained",
+            }
+            continue
+        if i in excluded:
+            continue  # A local correction cannot override the narration omission policy.
+        entries[i].source_id = choice.source_id
+        if choice.action == "match":
+            matches = heading_ids.get(choice.heading_id, [])
+            if len(matches) != 1 or choice.source_id not in headings[matches[0]].source_ids:
+                correction_errors[i] = (
+                    f"{entries[i].title}: saved correction no longer identifies one accepted heading; review it again"
+                )
+                continue
+            forced[i] = matches[0]
+            entries[i].title = headings[matches[0]].display_title
+            entries[i].level = choice.level or entries[i].level
     if config.narration.document_type == "paper":
         _paper_appendix_labels(entries, headings)
-        omitted_reference_indices = {
-            i for i, entry in enumerate(entries) if is_reference_heading(entry.title)
-        }
     resolutions = _adjacent_pdf_destinations(entries, book, headings, covered)
     resolutions = {
-        i: value for i, value in resolutions.items() if i not in omitted_reference_indices
+        i: value for i, value in resolutions.items() if i not in excluded and i not in manual
     }
     for index, resolution in resolutions.items():
         if "resolved_source_id" in resolution:
             entries[index].source_id = resolution["resolved_source_id"]
     # Corrections change final navigation scopes only. Source units, bookmarks,
     # chapter jobs and accepted narration/cache identities remain untouched.
-    if resolutions:
-        destinations = [positions[e.source_id] for e in entries if e.source_id in positions]
+    if resolutions or manual:
+        destinations = [
+            positions[e.source_id]
+            for i, e in enumerate(entries)
+            if i not in excluded and e.source_id in positions
+        ]
         if destinations != sorted(destinations):
-            report["errors"].append("Adjacent-page corrections conflict with source TOC order")
-    counts = Counter(
-        entry.source_id for i, entry in enumerate(entries) if i not in omitted_reference_indices
-    )
+            report["errors"].append(
+                "Adjacent-page corrections conflict with source TOC order"
+                if resolutions
+                else "User corrections conflict with source TOC order"
+            )
+    counts = Counter(entry.source_id for i, entry in enumerate(entries) if i not in excluded)
     replacements, insertions = {}, {}
     matched_order = []
     for entry_index, entry in enumerate(entries):
         record = {**source_entries[entry_index].model_dump(), "action": "unresolved"}
+        record["source_toc_entry"] = selected_indices[entry_index] + 1
         resolution = resolutions.get(entry_index, {})
         record.update(resolution)
+        if entry_index in manual:
+            record["user_correction"] = manual[entry_index].model_dump(exclude_none=True)
+            if manual[entry_index].action != "omit":
+                record.update(resolved_source_id=entry.source_id, resolved_title=entry.title)
+            if entry_index in correction_errors:
+                record["error"] = correction_errors[entry_index]
         report["entries"].append(record)
-        if entry_index in omitted_reference_indices:
+        if entry_index in excluded:
             # PDF source IDs identify pages, not sections: a reference list may share
             # a narrated page with conclusions or a subsequent technical appendix.
             # Exclude only its navigation entry, never the page or its remaining text.
-            record.update(action="omitted_reference_list", reason="Research-paper narration policy")
+            record.update(excluded[entry_index])
             continue
-        if "error" in resolution:
-            report["errors"].append(resolution["error"])
+        if "error" in record:
+            report["errors"].append(record["error"])
             continue
         if entry.source_id not in positions:
-            report["errors"].append(
-                f"{entry.title}: {entry.reason or 'unresolved source destination'}"
-            )
+            record["error"] = f"{entry.title}: {entry.reason or 'unresolved source destination'}"
+            report["errors"].append(record["error"])
             continue
         start = positions[entry.source_id]
         if entry.source_id in omitted and re.fullmatch(
@@ -499,8 +632,9 @@ def reconcile_toc(
         end = next(
             (
                 positions[e.source_id]
-                for e in entries[entry_index + 1 :]
-                if e.source_id in positions
+                for other_index, e in enumerate(entries[entry_index + 1 :], start=entry_index + 1)
+                if other_index not in excluded
+                and e.source_id in positions
                 and e.level <= entry.level
                 and positions[e.source_id] > start
             ),
@@ -511,9 +645,10 @@ def reconcile_toc(
             record["action"] = "omitted_source_content"
             continue
         if entry.level > 6:
-            report["errors"].append(
+            record["error"] = (
                 f"{entry.title}: source nesting exceeds the supported six heading levels"
             )
+            report["errors"].append(record["error"])
             continue
         if entry.source_id in omitted_front_ids:
             record["action"] = "omitted_front_matter"
@@ -524,18 +659,60 @@ def reconcile_toc(
             if entry.source_id in s.source_ids and i not in replacements
         ]
         candidates = _matching_headings(entry.title, {i: headings[i] for i in local})
+        if entry_index in forced:
+            if forced[entry_index] in replacements:
+                record["error"] = (
+                    f"{record['title']}: saved correction reuses another TOC entry's accepted heading"
+                )
+                report["errors"].append(record["error"])
+                continue
+            candidates = [forced[entry_index]]
+            record["matching"] = "user_selected_heading"
+        record["narration_candidates"] = [
+            {
+                "title": headings[i].display_title,
+                "source_ids": headings[i].source_ids,
+                "segment": i,
+            }
+            for i in local
+        ]
         if not candidates and len(local) == 1 and counts[entry.source_id] == 1:
             candidates = local
             record["matching"] = "unique_source_destination"
         if len(candidates) == 1:
             index = candidates[0]
             record["narration_heading"] = headings[index].display_title
+            printed = _verified_printed_title(
+                entry,
+                headings[index],
+                book,
+                book.units[start],
+                unique_destination=len(local) == 1 and counts[entry.source_id] == 1,
+            )
+            label_entry = entry
+            if printed:
+                label_entry = entry.model_copy(update={"title": headings[index].display_title})
+                prefix, number, body = split_title(label_entry.title)
+                printed_kind = re.match(
+                    r"^(chapter|section|part|appendix)\b", printed, re.IGNORECASE
+                )
+                if printed_kind and not prefix:
+                    # Chapters nested under a Part are still spoken as chapters,
+                    # not "Section four" merely because their TOC depth is two.
+                    label_entry.title = f"{printed_kind[1]} {number}. {body}"
+                record.update(
+                    label_matching="source_verified_printed_heading",
+                    resolved_title=label_entry.title,
+                    source_heading_evidence=printed,
+                )
             try:
-                replacements[index] = standard_heading(entry, book, config, headings[index])
+                replacements[index] = standard_heading(label_entry, book, config, headings[index])
             except ValueError as exc:
                 record["error"] = str(exc)
                 report["errors"].append(str(exc))
                 continue
+            if printed:
+                record["resolved_title"] = replacements[index].display_title
             number = split_title(replacements[index].display_title)[1]
             record.update(
                 action="matched",
@@ -543,7 +720,11 @@ def reconcile_toc(
                 display_title=replacements[index].display_title,
                 numbering={
                     "number": number,
-                    "source": "source_toc"
+                    "source": "user_correction"
+                    if entry_index in forced
+                    else "printed_source_heading"
+                    if printed
+                    else "source_toc"
                     if split_title(entry.title)[1]
                     else ("accepted_heading" if number else "unnumbered"),
                 },
@@ -580,16 +761,17 @@ def reconcile_toc(
                 if item.source_id == entry.source_id:
                     item.disposition, item.reason = "narrated", ""
         else:
-            report["errors"].append(
+            record["error"] = (
                 f"{entry.title}: {'ambiguous headings' if candidates else 'no safely located heading'} at {entry.source_id}"
             )
+            report["errors"].append(record["error"])
     if matched_order != sorted(matched_order):
         report["errors"].append("Matched narration headings are not in source TOC order")
     if report["errors"]:
         report["status"] = "needs_attention"
-        write_json(target, report)
+        report = write_toc_report(report, work, book)
         raise ValueError(
-            f"Source TOC reconciliation needs attention; inspect {target}. No final narration was overwritten. First issue: {report['errors'][0]}"
+            "Source TOC reconciliation needs attention. " + failure_details(report, work)
         )
     segments = []
     for index, segment in enumerate(result.segments):
@@ -618,7 +800,7 @@ def reconcile_toc(
             "Retained narration before the first included TOC heading requires an opening M4B entry. "
             "It was not silently discarded or reassigned to a later source heading."
         )
-    write_json(target, report)
+    write_toc_report(report, work, book)
     log.info(
         "Aligned %s navigation headings with %s; demoted %s body-only headings",
         len(replacements) + sum(map(len, insertions.values())),
@@ -642,13 +824,13 @@ def validate_published_navigation(transcript: Transcript, script, config: Config
         path = work / "toc-report.json"
         report = read_json(path)
         report["status"] = "edited_text_conflict"
+        report["phase"] = "published_navigation"
         report["edited_text_m4b_toc"] = actual
         report["errors"].append(
             "Edited text changes the reconciled heading structure, spoken headings or opening navigation entry."
         )
-        write_json(path, report)
+        report = write_toc_report(report, work)
         raise ValueError(
-            "Edited narration.txt conflicts with source-TOC reconciliation. Your edits were preserved. "
-            "Restore the generated headings/opening structure, or use synthesize narration.txt "
-            "to render your deliberate changes without reconciliation. See toc-report.json."
+            "Edited narration.txt conflicts with source-TOC reconciliation. "
+            + failure_details(report, work)
         )

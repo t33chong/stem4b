@@ -11,6 +11,7 @@ from . import __version__
 from .config import load_config
 from .covers import repair_cover
 from .pipeline import convert, default_work, synthesize_transcript
+from .toc_repair import repair_toc
 
 
 def parser() -> argparse.ArgumentParser:
@@ -51,6 +52,28 @@ def parser() -> argparse.ArgumentParser:
     )
     cover.add_argument("source", type=Path, help="Original PDF or EPUB")
     cover.add_argument("--work-dir", type=Path, help="Original workspace (default: OUTPUT.work)")
+    repair = commands.add_parser("repair-toc", help="Resolve TOC issues interactively, offline")
+    repair.add_argument("work_dir", type=Path, help="Existing book .work directory")
+    mode = repair.add_mutually_exclusive_group()
+    mode.add_argument(
+        "--check",
+        action="store_true",
+        help="Validate offline without prompts or publishing narration",
+    )
+    mode.add_argument(
+        "--publish",
+        action="store_true",
+        help="Validate and publish resolved narration, protecting manual edits",
+    )
+    repair.add_argument(
+        "--reset", action="store_true", help="Back up and clear saved TOC corrections first"
+    )
+    repair.add_argument("--verbose", action="store_true")
+    repair.add_argument(
+        "--backup-edits",
+        action="store_true",
+        help="With --publish: back up current narration and replace it; manual text edits are not merged",
+    )
     for command in (conversion, speech, cover):
         command.add_argument("-o", "--output", type=Path, required=True, help="Output .m4b file")
         command.add_argument("-c", "--config", type=Path, help="TOML configuration file")
@@ -78,6 +101,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     logging.getLogger("openai").setLevel(logging.WARNING)
     try:
+        if args.command == "repair-toc":
+            print(
+                repair_toc(
+                    args.work_dir,
+                    check=args.check,
+                    publish=args.publish,
+                    reset=args.reset,
+                    backup_edits=args.backup_edits,
+                )
+            )
+            return 0
         if args.env_file and not args.env_file.is_file():
             raise ValueError(f"Environment file not found: {args.env_file}")
         env_file = args.env_file or ((args.config.parent if args.config else Path.cwd()) / ".env")

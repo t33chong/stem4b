@@ -191,9 +191,11 @@ def load_script(path: Path) -> SpeechScript | Transcript:
     return script
 
 
-def save_narration(transcript: Transcript, work: Path):
+def save_narration(transcript: Transcript, work: Path, *, stem: str = "narration"):
     """Publish a generated baseline without overwriting the user's editable script."""
-    json_path, text_path = work / "narration.json", work / "narration.txt"
+    if Path(stem).name != stem or stem in {"", ".", ".."}:
+        raise ValueError("Narration filename must be a simple stem inside the workspace")
+    json_path, text_path = work / f"{stem}.json", work / f"{stem}.txt"
     generated = render_text(transcript)
     baseline = Transcript.model_validate(read_json(json_path)) if json_path.exists() else None
     if text_path.exists():
@@ -206,18 +208,18 @@ def save_narration(transcript: Transcript, work: Path):
             }
         if not unedited:
             if baseline == transcript:
-                log.info("Preserving edited narration.txt; generated baseline is unchanged")
+                log.info("Preserving edited %s; generated baseline is unchanged", text_path.name)
                 return
             if baseline and baseline.model_dump(exclude={"cover"}) == transcript.model_dump(
                 exclude={"cover"}
             ):
-                log.info("Updating cover metadata while preserving edited narration.txt")
+                log.info("Updating cover metadata while preserving edited %s", text_path.name)
                 write_json(json_path, transcript)
                 return
             raise ValueError(
-                "narration.txt contains edits and the generated baseline has changed or is missing. "
-                "Neither narration.txt nor narration.json was overwritten. To keep your text, use "
-                "synthesize narration.txt. To use the new narration, move the edited text aside "
+                f"{text_path.name} contains edits and the generated baseline has changed or is missing. "
+                f"Neither {text_path.name} nor {json_path.name} was overwritten. To keep your text, use "
+                f"synthesize {text_path.name}. To use the new narration, move the edited text aside "
                 "and rerun convert; accepted narration checkpoints remain cached."
             )
     # Text first: after an interruption it can be recognized as this generated export,

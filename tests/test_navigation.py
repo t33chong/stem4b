@@ -401,9 +401,7 @@ def test_omitted_exercises_do_not_reappear_but_neighboring_table_survives(worksp
     result = reconcile_toc(original, book, Config(), workspace)
     assert result.segments[0].text == "Useful diode summary table."
     assert [s.display_title for s in result.segments if s.kind == "heading"] == ["4.3. Transistors"]
-    assert (
-        read_json(workspace / "toc-report.json")["entries"][0]["action"] == "omitted_source_content"
-    )
+    assert read_json(workspace / "toc-report.json")["entries"][0]["action"] == "omitted_exercises"
 
 
 def front_book():
@@ -521,6 +519,9 @@ def test_no_source_toc_preserves_subheadings_and_navigation_config_does_not_chan
     config.navigation.reconcile = False
     assert narrator._cache_directory(chunk, []) == before
     assert reconcile_toc(original, book, config, workspace) == original
+    guide = (workspace / "toc-report.md").read_text()
+    assert "explicitly disabled" in guide
+    assert "What to do next" not in guide
 
 
 def test_manual_edits_are_protected_and_published_navigation_is_checked(workspace):
@@ -537,6 +538,10 @@ def test_manual_edits_are_protected_and_published_navigation_is_checked(workspac
         validate_published_navigation(result, load_script(path), Config(), workspace)
     assert path.read_bytes() == saved
     assert read_json(workspace / "toc-report.json")["status"] == "edited_text_conflict"
+    guide = (workspace / "toc-report.md").read_text()
+    assert "Your edits were preserved" in guide
+    assert "audiobook synthesize" in guide
+    assert "reconcile = false" not in guide
 
 
 def test_final_pass_reuses_accepted_drafts_and_navigation_settings_do_not_renarrate(workspace):
@@ -581,6 +586,10 @@ def test_unresolved_destinations_fail_before_any_narration_requests(workspace):
     with pytest.raises(ValueError, match="No narration requests were made"):
         Narrator(NoRequests(), config, workspace).narrate(book, plan_chunks(book, config.narration))
     assert read_json(workspace / "toc-report.json")["phase"] == "source_preflight"
+    guide = (workspace / "toc-report.md").read_text()
+    assert "No narration requests were made" in guide
+    assert "may make new paid model requests" in guide
+    assert "Accepted section checkpoints remain" not in guide
     assert not (workspace / "narration.json").exists()
 
 
