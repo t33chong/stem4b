@@ -72,7 +72,7 @@ def check_coverage(draft: Draft, chunk: Chunk, *, document_type: str = "book"):
     for item in draft.coverage:
         if item.disposition == "omitted":
             if not item.reason or item.source_id in cited:
-                raise ValueError("Omitted units need an explanation and cannot appear in narration")
+                raise ValueError(f"Omitted units need an explanation and cannot appear in narration: {item.source_id}")
         elif item.source_id not in cited:
             raise ValueError(f"{item.source_id} claims narration but no segment cites it")
     for index, segment in enumerate(draft.segments):
